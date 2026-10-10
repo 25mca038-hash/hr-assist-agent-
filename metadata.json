@@ -1,0 +1,6 @@
+{
+  "name": "TalentScout AI - HR Recruitment Agent (LLM & RAG)",
+  "description": "Intelligent HR Recruitment Assistance Agent powered by Google Gemini and RAG for resume parsing, candidate-job matching, HR policy retrieval, and interview question generation.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
