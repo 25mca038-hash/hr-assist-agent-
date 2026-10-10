@@ -74,18 +74,30 @@ export class VectorStore {
 
       const vectorSim = cosineSimilarity(queryEmbedding, chunk.embedding);
 
-      // Lexical keyword boost for acronyms and specific skills (e.g. Python, Docker, SQL)
+      // Lexical keyword and title matching boosts
       const chunkLower = chunk.text.toLowerCase();
+      const titleLower = chunk.documentTitle.toLowerCase();
+      const sectionLower = (chunk.sectionTitle || '').toLowerCase();
+
       let matchCount = 0;
+      let titleMatchCount = 0;
       for (const word of queryWords) {
         if (chunkLower.includes(word)) {
           matchCount++;
         }
+        if (titleLower.includes(word)) {
+          titleMatchCount++;
+        }
+        if (sectionLower.includes(word)) {
+          titleMatchCount += 0.5;
+        }
       }
-      const lexicalScore = queryWords.length > 0 ? (matchCount / queryWords.length) * 0.25 : 0;
 
-      // Combined hybrid score (75% semantic vector + 25% lexical match)
-      const combinedScore = Math.min(1.0, vectorSim * 0.75 + lexicalScore);
+      const lexicalScore = queryWords.length > 0 ? (matchCount / queryWords.length) * 0.35 : 0;
+      const titleScore = queryWords.length > 0 ? Math.min(0.45, (titleMatchCount / queryWords.length) * 0.45) : 0;
+
+      // Combined hybrid score (semantic vector + lexical + title relevance)
+      const combinedScore = Math.min(1.0, vectorSim * 0.45 + lexicalScore + titleScore);
 
       if (combinedScore >= minScore) {
         scored.push({

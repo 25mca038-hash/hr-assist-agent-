@@ -1,6 +1,7 @@
 import { GoogleGenAI, Type } from '@google/genai';
 import {
   Candidate,
+  CandidateStatus,
   JobDescription,
   HRPolicy,
   MatchAnalysis,
@@ -772,7 +773,63 @@ export function cleanResponseText(text: string): string {
 }
 
 /**
+ * Robust candidate entity matcher by full name or individual name tokens
+ */
+export function findMatchingCandidate(query: string, candidates: Candidate[]): Candidate | undefined {
+  if (!candidates || candidates.length === 0) return undefined;
+  const q = query.toLowerCase();
+
+  // 1. Exact full name match
+  const fullMatch = candidates.find(c => q.includes(c.name.toLowerCase()));
+  if (fullMatch) return fullMatch;
+
+  // 2. Individual name token match (e.g., 'Sarah', 'Jenkins', 'Alex', 'Chen', 'David', 'Kumar', 'Priya', 'Sharma')
+  const tokenMatch = candidates.find(c => {
+    const parts = c.name.toLowerCase().split(/\s+/).filter(p => p.length >= 3);
+    return parts.some(p => {
+      const regex = new RegExp(`\\b${p}\\b`, 'i');
+      return regex.test(q);
+    });
+  });
+  if (tokenMatch) return tokenMatch;
+
+  return undefined;
+}
+
+/**
+ * Robust job entity matcher by title or domain keywords
+ */
+export function findMatchingJob(query: string, jobs: JobDescription[]): JobDescription | undefined {
+  if (!jobs || jobs.length === 0) return undefined;
+  const q = query.toLowerCase();
+
+  // 1. Full title match
+  const fullMatch = jobs.find(j => q.includes(j.title.toLowerCase()));
+  if (fullMatch) return fullMatch;
+
+  // 2. Domain / keyword match
+  const kwMatch = jobs.find(j => {
+    const titleLower = j.title.toLowerCase();
+    if (q.includes('full-stack') || q.includes('full stack')) return titleLower.includes('full-stack');
+    if (q.includes('machine learning') || q.includes('ml') || q.includes('ai app') || q.includes('data science')) {
+      return titleLower.includes('machine learning') || titleLower.includes('ai');
+    }
+    if (q.includes('front-end') || q.includes('frontend') || q.includes('ui/ux') || q.includes('ui designer') || q.includes('ui engineer')) {
+      return titleLower.includes('front-end') || titleLower.includes('ui');
+    }
+    if (q.includes('devops') || q.includes('cloud') || q.includes('infrastructure')) {
+      return titleLower.includes('cloud') || titleLower.includes('devops') || titleLower.includes('infrastructure');
+    }
+    return false;
+  });
+  if (kwMatch) return kwMatch;
+
+  return undefined;
+}
+
+/**
  * Intelligent Grounded Synthesis Engine from Retrieved RAG Chunks
+ * Dynamically synthesizes contextual, non-repetitive answers for candidates, jobs, skills, and policies.
  */
 function synthesizeGroundedAnswerFromChunks(
   query: string,
@@ -798,93 +855,209 @@ function synthesizeGroundedAnswerFromChunks(
   }
 
   const qLower = query.toLowerCase();
+  const allCandidates = appStore.getCandidates();
+  const allJobs = appStore.getJobs();
 
-  // 1. Notice Period / Resignation Queries
+  // 1. Candidate-specific profile inquiry
+  const matchedCandidate = findMatchingCandidate(query, allCandidates);
+  if (matchedCandidate) {
+    const resumeChunk =
+      retrievedResults.find(
+        r =>
+          r.chunk.documentType === 'resume' &&
+          (r.chunk.documentTitle.toLowerCase().includes(matchedCandidate.name.toLowerCase()) ||
+            r.chunk.text.toLowerCase().includes(matchedCandidate.name.toLowerCase()))
+      ) || retrievedResults[0];
+
+    const currentStatus = matchedCandidate.status || 'Applied';
+    const notesSummary =
+      matchedCandidate.notes && matchedCandidate.notes.length > 0
+        ? `\n• Status Notes: "${matchedCandidate.notes[matchedCandidate.notes.length - 1]}"`
+        : '';
+
+    const answer = `Verified Candidate Profile for ${matchedCandidate.name}:
+
+• Pipeline Stage: ${currentStatus}${notesSummary}
+• Specialization / Headline: ${matchedCandidate.summary}
+• Location: ${matchedCandidate.location} | Email: ${matchedCandidate.email}
+• Verified Technical Skills: ${matchedCandidate.skills.join(', ')}
+• Experience History:
+${matchedCandidate.experience
+  .map(
+    e =>
+      `  - ${e.title} at ${e.company} (${e.duration}): ${e.responsibilities[0] || 'Core engineering contributions'}`
+  )
+  .join('\n')}
+• Academic Background: ${matchedCandidate.education.map(ed => `${ed.degree}, ${ed.institution} (${ed.year})`).join('; ')}
+${matchedCandidate.certifications && matchedCandidate.certifications.length > 0 ? `• Certifications: ${matchedCandidate.certifications.join(', ')}\n` : ''}${matchedCandidate.projects && matchedCandidate.projects.length > 0 ? `• Notable Project: ${matchedCandidate.projects[0].name} — ${matchedCandidate.projects[0].description}` : ''}
+
+[Source: ${resumeChunk.chunk.documentTitle}, Section: ${resumeChunk.chunk.sectionTitle || 'Candidate Profile'}]`;
+
+    return { question: query, answer: cleanResponseText(answer), isGrounded: true, sources };
+  }
+
+  // 2. Specific Job Requisition Inquiry
+  const matchedJob = findMatchingJob(query, allJobs);
+  if (matchedJob) {
+    const jobChunk =
+      retrievedResults.find(
+        r =>
+          r.chunk.documentType === 'job_description' &&
+          r.chunk.documentTitle.toLowerCase().includes(matchedJob.title.toLowerCase())
+      ) || retrievedResults[0];
+
+    const answer = `Official Job Requisition for ${matchedJob.title}:
+
+• Department: ${matchedJob.department} | Type: ${matchedJob.employmentType}
+• Location: ${matchedJob.location} | Status: ${matchedJob.status}
+• Experience Required: ${matchedJob.experienceRequired} | Compensation: ${matchedJob.salaryRange || 'Competitive'}
+• Overview: ${matchedJob.summary}
+• Required Core Skills: ${matchedJob.requiredSkills.join(', ')}
+• Preferred Skills: ${matchedJob.preferredSkills.join(', ')}
+• Key Responsibilities:
+${matchedJob.responsibilities.slice(0, 3).map(r => `  - ${r}`).join('\n')}
+• Qualifications: ${matchedJob.qualifications.join('; ')}
+
+[Source: ${jobChunk.chunk.documentTitle}, Section: ${jobChunk.chunk.sectionTitle || 'Job Specification'}]`;
+
+    return { question: query, answer: cleanResponseText(answer), isGrounded: true, sources };
+  }
+
+  // 3. Skill & Technology Search across Candidate Pool
+  const commonTech = [
+    'python', 'react', 'typescript', 'docker', 'kubernetes', 'aws',
+    'node.js', 'postgresql', 'fastapi', 'pytorch', 'graphql', 'next.js',
+    'django', 'sql', 'langchain', 'rag', 'figma', 'accessibility', 'wcag',
+    'redis', 'express', 'microservices', 'ci/cd'
+  ];
+  const mentionedTech = commonTech.filter(tech => qLower.includes(tech));
+  if (mentionedTech.length > 0) {
+    const matchingCands = allCandidates.filter(c =>
+      mentionedTech.some(
+        t =>
+          c.skills.some(s => s.toLowerCase().includes(t)) ||
+          c.summary.toLowerCase().includes(t) ||
+          c.rawText.toLowerCase().includes(t)
+      )
+    );
+
+    if (matchingCands.length > 0) {
+      const candSummaries = matchingCands
+        .map(c => {
+          const matchingSkills = c.skills.filter(s =>
+            mentionedTech.some(t => s.toLowerCase().includes(t))
+          );
+          return `• ${c.name} [Status: ${c.status || 'Applied'}]: Verified in ${matchingSkills.join(', ') || mentionedTech.join(', ')}\n  Headline: ${c.summary.slice(0, 130)}...`;
+        })
+        .join('\n\n');
+
+      const answer = `Found ${matchingCands.length} candidate(s) in the database with verified expertise in ${mentionedTech.map(t => t.toUpperCase()).join(', ')}:
+
+${candSummaries}
+
+You can ask me to shortlist, schedule an interview, or analyze any candidate against open roles.`;
+
+      return { question: query, answer: cleanResponseText(answer), isGrounded: true, sources };
+    }
+  }
+
+  // 4. Policy Search Checks
   if (qLower.includes('notice period') || qLower.includes('resignation') || qLower.includes('buyout')) {
-    const policyChunk = retrievedResults.find(r => r.chunk.documentType === 'hr_policy' && r.chunk.text.includes('NOTICE PERIOD')) || retrievedResults[0];
-    const answer = `Based on corporate policy:
+    const policyChunk =
+      retrievedResults.find(
+        r => r.chunk.documentType === 'hr_policy' && r.chunk.text.includes('NOTICE PERIOD')
+      ) || retrievedResults[0];
 
-• During Probation (First 90 Days): Either the employee or the company may terminate employment with 30 calendar days written notice, or payment in lieu thereof.
-• Confirmed Full-Time Staff: Confirmed employees must provide a standard 60 calendar days written notice period upon resignation.
-• Notice Period Buyout: Notice period buyouts may only be authorized with joint written approval from the Department Head and Chief People Officer.
+    const answer = `Based on corporate HR policy:
 
-[Source: ${policyChunk.chunk.documentTitle}, Section: ${policyChunk.chunk.sectionTitle || 'Notice Period & Resignation Protocols'}]`;
+• During Probation (First 90 Days): Either party may terminate with 30 calendar days written notice, or payment in lieu thereof.
+• Confirmed Full-Time Staff: Confirmed employees must provide standard 60 calendar days written notice upon resignation.
+• Notice Period Buyout: Buyouts require joint written authorization from the Department Head and Chief People Officer.
 
-    return { question: query, answer: cleanResponseText(answer), isGrounded: true, sources };
-  }
-
-  // 2. Recruitment Steps / Interview Stages
-  if (qLower.includes('recruitment steps') || qLower.includes('interview stages') || qLower.includes('recruitment stages') || qLower.includes('hiring steps')) {
-    const policyChunk = retrievedResults.find(r => r.chunk.documentType === 'hr_policy') || retrievedResults[0];
-    const answer = `According to the corporate recruitment policy, recruitment proceeds through four structured stages:
-
-1. Stage 1: Resume Screening & Qualification Verification
-   - Resumes evaluated strictly against verified criteria. Blind screening enforced: personal identifiers, age, gender, photo, or religion are excluded. No automated disqualification.
-2. Stage 2: Technical & Competency Evaluation (45–60 mins)
-   - Standardized job-specific technical and problem-solving questions. Parity maintained across all candidates.
-3. Stage 3: Behavioral & Values Assessment (STAR Method) (45 mins)
-   - Evaluates Situation, Task, Action, and Result against predefined rubrics (Scale 1 to 4).
-4. Stage 4: Executive Alignment & Compensation Review
-   - Final review by Hiring Manager and HRBP. Reference checks completed within 3 business days; candidate feedback provided within 48 hours.
-
-[Source: ${policyChunk.chunk.documentTitle}, Section: ${policyChunk.chunk.sectionTitle || 'Structured Recruitment Stages'}]`;
+[Source: ${policyChunk.chunk.documentTitle}, Section: ${policyChunk.chunk.sectionTitle || 'Notice Period Protocols'}]`;
 
     return { question: query, answer: cleanResponseText(answer), isGrounded: true, sources };
   }
 
-  // 3. Remote Work / Stipend / Allowance Queries
-  if (qLower.includes('remote') || qLower.includes('stipend') || qLower.includes('allowance') || qLower.includes('probation')) {
-    const policyChunk = retrievedResults.find(r => r.chunk.documentType === 'hr_policy') || retrievedResults[0];
+  if (
+    qLower.includes('remote') ||
+    qLower.includes('stipend') ||
+    qLower.includes('allowance') ||
+    qLower.includes('probation')
+  ) {
+    const policyChunk =
+      retrievedResults.find(r => r.chunk.documentType === 'hr_policy') || retrievedResults[0];
+
     const answer = `According to company remote work and employment regulations:
 
-• Home Office Setup Stipend: Eligible employees receive a one-time stipend of $1,200 USD upon onboarding.
-• Monthly Technology Allowance: A recurring $100 USD/month allowance covering high-speed internet and mobile phone.
-• Probation Period: Standard 90-day probationary period with mandatory 30-day alignment check-ins and 60-day performance reviews. Confirmation is finalized at day 90.
+• Home Office Setup Stipend: $1,200 USD one-time allowance upon onboarding.
+• Monthly Technology Allowance: $100 USD/month recurring allowance for high-speed internet and mobile.
+• Probation Period: Standard 90-day probationary period with 30-day alignment check-ins and 60-day performance review. Confirmation finalized at day 90.
 
 [Source: ${policyChunk.chunk.documentTitle}, Section: ${policyChunk.chunk.sectionTitle || 'Remote Work & Probation Regulations'}]`;
 
     return { question: query, answer: cleanResponseText(answer), isGrounded: true, sources };
   }
 
-  // 4. Candidate Experience / Skills Queries
-  if (qLower.includes('python') || qLower.includes('machine learning') || qLower.includes('alex chen') || qLower.includes('priya sharma') || qLower.includes('sql') || qLower.includes('docker') || qLower.includes('aws') || qLower.includes('who') || qLower.includes('which candidate')) {
-    const resumeChunks = retrievedResults.filter(r => r.chunk.documentType === 'resume');
-    if (resumeChunks.length > 0) {
-      const topResume = resumeChunks[0];
-      const answer = `Based on verified candidate resume records in the knowledge base:
+  if (
+    qLower.includes('recruitment step') ||
+    qLower.includes('interview stage') ||
+    qLower.includes('hiring stage') ||
+    qLower.includes('star') ||
+    qLower.includes('blind screening') ||
+    qLower.includes('anti-bias')
+  ) {
+    const policyChunk =
+      retrievedResults.find(r => r.chunk.documentType === 'hr_policy') || retrievedResults[0];
 
-• Primary Match: ${topResume.chunk.documentTitle}
-• Relevant Excerpt:
-${topResume.chunk.text.split('\n').filter(l => l.trim().length > 0).slice(0, 6).map(l => `  > ${l}`).join('\n')}
+    const answer = `According to the corporate recruitment policy, recruitment proceeds through four structured stages:
 
-• Verified Details: Candidate profile highlights demonstrated expertise and verified accomplishments aligned with your query.
+1. Stage 1: Resume Screening & Qualification Verification (Blind screening enforced; no automated disqualification).
+2. Stage 2: Technical & Competency Evaluation (45–60 mins, standardized rubric per role).
+3. Stage 3: Behavioral & Values Assessment (45 mins, STAR framework: Situation, Task, Action, Result).
+4. Stage 4: Executive Alignment & Compensation Review (Final review by Hiring Manager and HRBP).
 
-[Source: ${topResume.chunk.documentTitle}, Section: ${topResume.chunk.sectionTitle || 'Skills & Experience'}]`;
-
-      return { question: query, answer: cleanResponseText(answer), isGrounded: true, sources };
-    }
-  }
-
-  // 5. Job Description Queries
-  const jobChunk = retrievedResults.find(r => r.chunk.documentType === 'job_description');
-  if (jobChunk && (qLower.includes('qualification') || qLower.includes('required') || qLower.includes('job') || qLower.includes('position'))) {
-    const answer = `Based on the official job requisition for ${jobChunk.chunk.documentTitle}:
-
-${jobChunk.chunk.text.split('\n').filter(l => l.trim().length > 0).slice(0, 8).map(l => `• ${l}`).join('\n')}
-
-[Source: ${jobChunk.chunk.documentTitle}, Section: ${jobChunk.chunk.sectionTitle || 'Requirements'}]`;
+[Source: ${policyChunk.chunk.documentTitle}, Section: ${policyChunk.chunk.sectionTitle || 'Structured Recruitment Stages'}]`;
 
     return { question: query, answer: cleanResponseText(answer), isGrounded: true, sources };
   }
 
-  // 6. Generic Grounded Synthesis from Top Chunk
+  // 5. Intelligent Extractive Synthesis from Retrieved Chunks
+  const queryWords = qLower.split(/\s+/).filter(w => w.length > 2);
+  const relevantSentences: string[] = [];
+  const usedDocs = new Set<string>();
+
+  for (const res of retrievedResults.slice(0, 3)) {
+    const text = res.chunk.text;
+    const lines = text.split(/\n+/).map(l => l.trim()).filter(l => l.length > 15);
+    for (const line of lines) {
+      const lineLower = line.toLowerCase();
+      const hasWord = queryWords.some(w => lineLower.includes(w));
+      if (hasWord && !relevantSentences.includes(line)) {
+        relevantSentences.push(line);
+        usedDocs.add(`${res.chunk.documentTitle} (${res.chunk.sectionTitle || 'General'})`);
+        if (relevantSentences.length >= 5) break;
+      }
+    }
+    if (relevantSentences.length >= 5) break;
+  }
+
+  if (relevantSentences.length > 0) {
+    const answer = `Based on verified records from the recruitment knowledge base:
+
+${relevantSentences.slice(0, 5).map(s => `• ${s.replace(/^[•\-*]\s*/, '')}`).join('\n')}
+
+[Sources: ${Array.from(usedDocs).join(', ')}]`;
+
+    return { question: query, answer: cleanResponseText(answer), isGrounded: true, sources };
+  }
+
+  // 6. Generic Grounded Synthesis from Top Retrieved Chunk
   const topResult = retrievedResults[0];
-  const lines = topResult.chunk.text.split('\n').filter(l => l.trim().length > 0);
-  const answer = `Based on verified knowledge base records from ${topResult.chunk.documentTitle}:
+  const topLines = topResult.chunk.text.split('\n').filter(l => l.trim().length > 0).slice(0, 5);
+  const answer = `Based on verified records from ${topResult.chunk.documentTitle}:
 
-${lines.slice(0, 5).map(l => `• ${l}`).join('\n')}
-
-Note: Answers are strictly grounded in uploaded resumes, job requisitions, and HR policy files.
+${topLines.map(l => `• ${l.replace(/^[•\-*]\s*/, '')}`).join('\n')}
 
 [Source: ${topResult.chunk.documentTitle}, Section: ${topResult.chunk.sectionTitle || 'Overview'}]`;
 
@@ -992,9 +1165,264 @@ export async function runRecruitmentAgent(
   const toolCalls: Array<{ toolName: string; input: any; outputSummary: string }> = [];
   const sources: Array<{ documentTitle: string; documentType: string; snippet: string }> = [];
 
-  const qLower = userQuery.toLowerCase();
+  const qLower = userQuery.toLowerCase().trim();
 
-  // 1. ACTION: Shortlist or Advance / Update Candidate Pipeline Stage
+  // 1. GREETINGS & COPILOT CAPABILITIES
+  if (
+    qLower === 'hi' ||
+    qLower === 'hello' ||
+    qLower === 'hey' ||
+    qLower.startsWith('hi ') ||
+    qLower.startsWith('hello ') ||
+    qLower.startsWith('hey ') ||
+    qLower.includes('what can you do') ||
+    qLower.includes('who are you') ||
+    qLower.includes('help') ||
+    qLower.includes('how do you work') ||
+    qLower.includes('guide me') ||
+    qLower.includes('capabilities') ||
+    qLower.includes('features')
+  ) {
+    const candNames = context.candidates.map(c => c.name).join(', ');
+    const text = `Hello! I am your TalentScout AI Recruitment Copilot. I work directly alongside your dashboard to automate hiring tasks, evaluate applicants, and maintain your pipeline in real time.
+
+Here are key actions you can ask me to perform right now:
+• Candidate Pipeline: Say "Shortlist Sarah Jenkins", "Move Alex Chen to Technical Interview", or "Reject David Kumar".
+• Schedule Interviews: Say "Schedule technical interview for Priya Sharma for Full-Stack role" — I will create calendar invites and generate Google Meet links synced to your dashboard.
+• Personalized Outreach: Say "Draft interview invitation email for Sarah" or "Draft formal offer letter for Priya".
+• AI Resume Matching: Say "Analyze Alex Chen for Machine Learning role" to view estimated match scores, verified skills, and requirement gaps.
+• Candidate Comparison: Say "Compare Priya Sharma and Alex Chen for Full-Stack opening" to generate an executive matrix.
+• Structured Interview Kits: Say "Generate interview questions for Senior Full-Stack Engineer" with STAR behavioral and technical rubrics.
+• Job Requisitions: Say "Create job for Senior DevOps Engineer requiring AWS, Docker, Kubernetes" or "List open jobs".
+• Talent Pool Search: Say "Who knows Python?" or "List candidates" to inspect verified skills (${candNames}).
+• Corporate Policy Q&A: Inquire about notice periods, probation, remote stipends, or blind screening guidelines.
+
+Try typing any command above or clicking the action chips on your dashboard!`;
+
+    return {
+      text: cleanResponseText(text),
+      toolCalls: [
+        {
+          toolName: 'assistant_guide',
+          input: { query: userQuery },
+          outputSummary: 'Presented interactive recruitment copilot capabilities and quick action commands.',
+        },
+      ],
+      sources,
+    };
+  }
+
+  // 2. DASHBOARD & PIPELINE METRICS INTENT
+  if (
+    qLower.includes('pipeline') ||
+    qLower.includes('dashboard') ||
+    qLower.includes('how many candidates') ||
+    qLower.includes('status of candidates') ||
+    qLower.includes('hiring stats') ||
+    qLower.includes('metrics') ||
+    qLower.includes('upcoming interviews') ||
+    qLower.includes('recruitment summary') ||
+    qLower.includes('overview')
+  ) {
+    const candidates = appStore.getCandidates();
+    const jobs = appStore.getJobs();
+    const interviews = appStore.getInterviews();
+
+    const stageCounts: Record<string, number> = {
+      Applied: 0,
+      Screening: 0,
+      Shortlisted: 0,
+      'Technical Interview': 0,
+      'Executive Review': 0,
+      'Offer Sent': 0,
+      Hired: 0,
+      Rejected: 0,
+    };
+
+    candidates.forEach(c => {
+      const st = c.status || 'Applied';
+      stageCounts[st] = (stageCounts[st] || 0) + 1;
+    });
+
+    const activeInterviews = interviews.filter(i => i.status === 'Scheduled');
+
+    toolCalls.push({
+      toolName: 'get_dashboard_pipeline_metrics',
+      input: { totalCandidates: candidates.length, totalJobs: jobs.length },
+      outputSummary: `Retrieved live metrics: ${candidates.length} candidates across ${jobs.length} jobs, ${activeInterviews.length} upcoming interviews.`,
+    });
+
+    const text = `Current Recruitment Dashboard Summary:
+
+• Total Candidates in Pool: ${candidates.length}
+  - Applied: ${stageCounts.Applied}
+  - In Screening: ${stageCounts.Screening}
+  - Shortlisted: ${stageCounts.Shortlisted}
+  - Technical Interview: ${stageCounts['Technical Interview']}
+  - Executive Review: ${stageCounts['Executive Review']}
+  - Offer Sent / Hired: ${stageCounts['Offer Sent'] + stageCounts.Hired}
+  - Rejected: ${stageCounts.Rejected}
+
+• Active Job Requisitions (${jobs.length}):
+${jobs.map(j => `  - ${j.title} (${j.department}): ${j.status}`).join('\n')}
+
+• Upcoming Scheduled Interviews (${activeInterviews.length}):
+${
+  activeInterviews.length > 0
+    ? activeInterviews
+        .map(
+          i =>
+            `  - ${i.candidateName} (${i.interviewType}) with ${i.interviewer} on ${new Date(i.scheduledTime).toLocaleDateString()} — Link: ${i.meetingLink}`
+        )
+        .join('\n')
+    : '  - No pending interviews scheduled. You can ask me to schedule one anytime!'
+}
+
+All metrics are synchronized in real-time with your live dashboard pipeline cards.`;
+
+    return {
+      text: cleanResponseText(text),
+      toolCalls,
+      sources,
+    };
+  }
+
+  // 3. CANDIDATE DIRECTORY / LIST INTENT
+  if (
+    qLower.includes('list candidates') ||
+    qLower.includes('show candidates') ||
+    qLower.includes('all candidates') ||
+    qLower.includes('who are the candidates') ||
+    qLower.includes('candidate pool') ||
+    qLower.includes('talent pool') ||
+    qLower.includes('talent directory')
+  ) {
+    const candidates = appStore.getCandidates();
+    toolCalls.push({
+      toolName: 'list_talent_directory',
+      input: { count: candidates.length },
+      outputSummary: `Listed ${candidates.length} candidate profiles from talent directory.`,
+    });
+
+    const text = `Talent Directory (${candidates.length} Active Candidates):
+
+${candidates
+  .map(
+    (c, idx) => `${idx + 1}. ${c.name} [Status: ${c.status || 'Applied'}]
+   • Location: ${c.location}
+   • Skills: ${c.skills.slice(0, 5).join(', ')}
+   • Headline: ${c.summary.slice(0, 110)}...`
+  )
+  .join('\n\n')}
+
+You can command me to shortlist, schedule an interview, draft an outreach email, or evaluate any candidate against open positions.`;
+
+    return {
+      text: cleanResponseText(text),
+      toolCalls,
+      sources,
+    };
+  }
+
+  // 4. ACTIVE REQUISITIONS LIST INTENT
+  if (
+    qLower.includes('list jobs') ||
+    qLower.includes('show jobs') ||
+    qLower.includes('all jobs') ||
+    qLower.includes('open jobs') ||
+    qLower.includes('active positions') ||
+    qLower.includes('open positions') ||
+    qLower.includes('what jobs are open') ||
+    qLower.includes('available jobs')
+  ) {
+    const jobs = appStore.getJobs();
+    toolCalls.push({
+      toolName: 'list_job_requisitions',
+      input: { count: jobs.length },
+      outputSummary: `Retrieved ${jobs.length} active requisitions.`,
+    });
+
+    const text = `Active Job Requisitions (${jobs.length} Open Roles):
+
+${jobs
+  .map(
+    (j, idx) => `${idx + 1}. ${j.title} (${j.department})
+   • Location: ${j.location} · ${j.employmentType}
+   • Experience: ${j.experienceRequired} · Salary: ${j.salaryRange || 'Competitive'}
+   • Required Skills: ${j.requiredSkills.join(', ')}
+   • Summary: ${j.summary.slice(0, 100)}...`
+  )
+  .join('\n\n')}
+
+Would you like me to find top matching candidates for any of these roles?`;
+
+    return {
+      text: cleanResponseText(text),
+      toolCalls,
+      sources,
+    };
+  }
+
+  // 5. SEARCH CANDIDATES BY SKILL
+  if (
+    qLower.includes('who knows') ||
+    qLower.includes('candidates with') ||
+    qLower.includes('find candidates') ||
+    qLower.includes('search candidates') ||
+    qLower.includes('developer with') ||
+    qLower.includes('engineer with') ||
+    qLower.includes('anyone with')
+  ) {
+    const techTokens = [
+      'python', 'react', 'typescript', 'docker', 'kubernetes', 'aws',
+      'node.js', 'postgresql', 'fastapi', 'pytorch', 'graphql', 'next.js',
+      'django', 'sql', 'figma', 'accessibility', 'rag', 'langchain'
+    ];
+    const matchedTokens = techTokens.filter(t => qLower.includes(t));
+    const searchTerms =
+      matchedTokens.length > 0
+        ? matchedTokens
+        : qLower.split(/\s+/).filter(w => w.length > 3 && !['candidates', 'with', 'knows', 'find', 'search'].includes(w));
+
+    const candidates = appStore.getCandidates();
+    const matches = candidates.filter(c =>
+      searchTerms.some(
+        term =>
+          c.skills.some(s => s.toLowerCase().includes(term)) ||
+          c.summary.toLowerCase().includes(term) ||
+          c.rawText.toLowerCase().includes(term)
+      )
+    );
+
+    toolCalls.push({
+      toolName: 'search_candidates_by_skill',
+      input: { query: userQuery, searchTerms },
+      outputSummary: `Identified ${matches.length} matching candidate profiles.`,
+    });
+
+    if (matches.length > 0) {
+      const text = `Candidates matching "${searchTerms.join(', ')}":
+
+${matches
+  .map(
+    c => `• ${c.name} [Status: ${c.status || 'Applied'}]
+  - Verified Skills: ${c.skills.join(', ')}
+  - Location: ${c.location}
+  - Experience: ${c.experience[0]?.title || 'Engineer'} at ${c.experience[0]?.company || 'Tech Corp'} (${c.experience[0]?.duration || ''})`
+  )
+  .join('\n\n')}
+
+Would you like me to shortlist or schedule an interview with any of these candidates?`;
+
+      return {
+        text: cleanResponseText(text),
+        toolCalls,
+        sources,
+      };
+    }
+  }
+
+  // 6. ACTION: Shortlist or Advance / Reject / Update Candidate Pipeline Stage
   if (
     qLower.includes('shortlist') ||
     qLower.includes('advance') ||
@@ -1005,9 +1433,12 @@ export async function runRecruitmentAgent(
     qLower.includes('hire') ||
     qLower.includes('offer sent')
   ) {
-    const cand = context.candidates.find(c => qLower.includes(c.name.toLowerCase())) || context.candidates[0];
+    const cand =
+      findMatchingCandidate(userQuery, context.candidates) ||
+      context.candidates.find(c => !c.status || c.status === 'Applied') ||
+      context.candidates[0];
 
-    let newStatus: any = 'Shortlisted';
+    let newStatus: CandidateStatus = 'Shortlisted';
     if (qLower.includes('reject')) newStatus = 'Rejected';
     else if (qLower.includes('screen')) newStatus = 'Screening';
     else if (qLower.includes('tech') || qLower.includes('technical')) newStatus = 'Technical Interview';
@@ -1043,18 +1474,21 @@ export async function runRecruitmentAgent(
     };
   }
 
-  // 2. ACTION: Schedule Interview & Calendar Invite
+  // 7. ACTION: Schedule Interview & Calendar Invite
   if (
     qLower.includes('schedule interview') ||
     qLower.includes('book interview') ||
     qLower.includes('setup interview') ||
     qLower.includes('set up interview') ||
     qLower.includes('schedule a call') ||
+    qLower.includes('schedule call') ||
     qLower.includes('schedule phone screen') ||
-    qLower.includes('schedule technical round')
+    qLower.includes('schedule technical round') ||
+    qLower.includes('schedule technical') ||
+    qLower.includes('arrange interview')
   ) {
-    const cand = context.candidates.find(c => qLower.includes(c.name.toLowerCase())) || context.candidates[0];
-    const job = context.jobs.find(j => qLower.includes(j.title.toLowerCase())) || context.jobs[0];
+    const cand = findMatchingCandidate(userQuery, context.candidates) || context.candidates[0];
+    const job = findMatchingJob(userQuery, context.jobs) || context.jobs[0];
 
     let interviewType: 'Phone Screen' | 'Technical Round' | 'Behavioral Round' | 'Executive Review' = 'Technical Round';
     if (qLower.includes('phone') || qLower.includes('screen')) interviewType = 'Phone Screen';
@@ -1065,7 +1499,7 @@ export async function runRecruitmentAgent(
     futureDate.setHours(14, 0, 0, 0);
 
     const interviewId = `int-${Date.now()}`;
-    const meetCode = `tsc-${cand.name.toLowerCase().slice(0, 3)}-${Math.floor(100 + Math.random() * 900)}`;
+    const meetCode = `tsc-${cand.name.toLowerCase().replace(/[^a-z]/g, '').slice(0, 3)}-${Math.floor(100 + Math.random() * 900)}`;
     const newInterview = {
       id: interviewId,
       candidateId: cand.id,
@@ -1074,7 +1508,12 @@ export async function runRecruitmentAgent(
       jobTitle: job.title,
       interviewType,
       scheduledTime: futureDate.toISOString(),
-      interviewer: interviewType === 'Technical Round' ? 'Senior Technical Lead' : (interviewType === 'Executive Review' ? 'VP of Engineering' : 'HR Talent Partner'),
+      interviewer:
+        interviewType === 'Technical Round'
+          ? 'Senior Technical Lead'
+          : interviewType === 'Executive Review'
+          ? 'VP of Engineering'
+          : 'HR Talent Partner',
       meetingLink: `https://meet.google.com/${meetCode}`,
       status: 'Scheduled' as const,
       notes: `Evaluating competencies against ${job.title} job specification and company STAR rubric.`,
@@ -1082,18 +1521,19 @@ export async function runRecruitmentAgent(
     };
 
     appStore.addInterview(newInterview);
+    appStore.updateCandidateStatus(cand.id, 'Technical Interview', `Interview booked for ${futureDate.toLocaleDateString()}.`);
 
     toolCalls.push({
       toolName: 'schedule_candidate_interview',
       input: { candidateName: cand.name, jobTitle: job.title, interviewType, scheduledTime: newInterview.scheduledTime },
-      outputSummary: `Scheduled ${interviewType} for ${cand.name} on ${futureDate.toLocaleDateString()} with meeting link generated.`,
+      outputSummary: `Scheduled ${interviewType} for ${cand.name} on ${futureDate.toLocaleDateString()} with Google Meet link generated.`,
     });
 
     const text = `I have scheduled the ${interviewType} for ${cand.name} regarding the "${job.title}" requisition.
 • Date & Time: ${futureDate.toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
 • Interviewer: ${newInterview.interviewer}
 • Secure Meeting Link: ${newInterview.meetingLink}
-• Status: Confirmed & synced with recruitment calendar and dashboard.`;
+• Status: Confirmed & synced with recruitment calendar and live dashboard.`;
 
     return {
       text: cleanResponseText(text),
@@ -1106,7 +1546,7 @@ export async function runRecruitmentAgent(
     };
   }
 
-  // 3. ACTION: Draft Candidate Outreach Email / Offer Letter
+  // 8. ACTION: Draft Candidate Outreach Email / Offer Letter / Rejection
   if (
     qLower.includes('draft email') ||
     qLower.includes('draft outreach') ||
@@ -1114,14 +1554,15 @@ export async function runRecruitmentAgent(
     qLower.includes('invitation email') ||
     qLower.includes('draft offer') ||
     qLower.includes('offer letter') ||
-    qLower.includes('rejection email')
+    qLower.includes('rejection email') ||
+    qLower.includes('email candidate')
   ) {
-    const cand = context.candidates.find(c => qLower.includes(c.name.toLowerCase())) || context.candidates[0];
-    const job = context.jobs.find(j => qLower.includes(j.title.toLowerCase())) || context.jobs[0];
+    const cand = findMatchingCandidate(userQuery, context.candidates) || context.candidates[0];
+    const job = findMatchingJob(userQuery, context.jobs) || context.jobs[0];
 
     const isOffer = qLower.includes('offer');
     const isRejection = qLower.includes('rejection') || qLower.includes('decline');
-    const emailType = isOffer ? 'Offer Letter' : (isRejection ? 'Status Update' : 'Interview Invitation');
+    const emailType = isOffer ? 'Offer Letter' : isRejection ? 'Status Update' : 'Interview Invitation';
 
     let subject = `Invitation to Interview: ${job.title} at TalentScout Global`;
     let body = `Dear ${cand.name},
@@ -1163,7 +1604,7 @@ TalentScout Global`;
 
 Thank you for taking the time to speak with our team regarding the ${job.title} role. We genuinely appreciate the opportunity to learn about your background and experience.
 
-While your background in software engineering is commendable, we have decided to advance other candidates whose specific experience more closely aligns with our immediate architectural needs for this role.
+While your background is commendable, we have decided to advance other candidates whose specific experience more closely aligns with our immediate architectural needs for this role.
 
 We will keep your resume in our talent directory for future openings that match your skills. We wish you continued success in your professional endeavors.
 
@@ -1210,7 +1651,7 @@ This draft has been stored in your recruitment workspace. You can copy the messa
     };
   }
 
-  // 4. ACTION: Create / Post a New Job Requisition
+  // 9. ACTION: Create / Post a New Job Requisition
   if (
     qLower.includes('create job') ||
     qLower.includes('post job') ||
@@ -1219,7 +1660,6 @@ This draft has been stored in your recruitment workspace. You can copy the messa
     qLower.includes('create requisition') ||
     qLower.includes('post requisition')
   ) {
-    // Extract job title
     let jobTitle = 'Senior Cloud Infrastructure Engineer';
     const forMatch = userQuery.match(/(?:for|named|titled|as)\s+([^,.;\n]+?)(?:with|in|requiring|experience|$)/i);
     if (forMatch && forMatch[1].trim().length > 2) {
@@ -1231,7 +1671,6 @@ This draft has been stored in your recruitment workspace. You can copy the messa
       }
     }
 
-    // Extract skills mentioned in prompt or use smart defaults
     const candidateSkillsFound: string[] = [];
     const techPool = ['Python', 'Docker', 'Kubernetes', 'AWS', 'GCP', 'Terraform', 'React', 'Node.js', 'PostgreSQL', 'TypeScript', 'CI/CD', 'Kafka', 'GraphQL'];
     for (const tech of techPool) {
@@ -1241,7 +1680,6 @@ This draft has been stored in your recruitment workspace. You can copy the messa
     }
     const finalSkills = candidateSkillsFound.length > 0 ? candidateSkillsFound : ['AWS', 'Docker', 'Kubernetes', 'CI/CD Pipelines', 'Linux'];
 
-    // Experience
     let expRequired = '3+ years';
     const expMatch = userQuery.match(/(\d+\+?\s*years?)/i);
     if (expMatch) expRequired = expMatch[1];
@@ -1249,7 +1687,7 @@ This draft has been stored in your recruitment workspace. You can copy the messa
     const newJob: JobDescription = {
       id: `job-${Date.now()}`,
       title: jobTitle,
-      department: qLower.includes('product') ? 'Product' : (qLower.includes('data') ? 'Data & AI' : 'Engineering'),
+      department: qLower.includes('product') ? 'Product' : qLower.includes('data') ? 'Data & AI' : 'Engineering',
       location: 'Remote / US',
       employmentType: 'Full-time',
       experienceRequired: expRequired,
@@ -1288,7 +1726,7 @@ This draft has been stored in your recruitment workspace. You can copy the messa
     };
   }
 
-  // 2. ACTION: Add / Create Candidate Profile
+  // 10. ACTION: Add / Create Candidate Profile
   if (
     qLower.includes('add candidate') ||
     qLower.includes('create candidate') ||
@@ -1359,13 +1797,14 @@ This draft has been stored in your recruitment workspace. You can copy the messa
     };
   }
 
-  // 3. ACTION: AI Resume Analysis (Matching a Candidate against a Job)
+  // 11. ACTION: AI Resume Analysis (Matching a Candidate against a Job)
   if (
-    (qLower.includes('analyze') || qLower.includes('match') || qLower.includes('evaluate')) &&
-    (context.candidates.some(c => qLower.includes(c.name.toLowerCase())) || context.jobs.some(j => qLower.includes(j.title.toLowerCase())))
+    qLower.includes('analyze') ||
+    qLower.includes('match') ||
+    qLower.includes('evaluate')
   ) {
-    const matchedCandidate = context.candidates.find(c => qLower.includes(c.name.toLowerCase())) || context.candidates[0];
-    const matchedJob = context.jobs.find(j => qLower.includes(j.title.toLowerCase())) || context.jobs[0];
+    const matchedCandidate = findMatchingCandidate(userQuery, context.candidates) || context.candidates[0];
+    const matchedJob = findMatchingJob(userQuery, context.jobs) || context.jobs[0];
 
     toolCalls.push({
       toolName: 'analyze_resume',
@@ -1399,8 +1838,14 @@ Note: Match scores serve strictly as assistive aids for human interviewers. Fina
     };
   }
 
-  // 4. ACTION: Navigation Commands
-  if (qLower.includes('go to') || qLower.includes('open') || qLower.includes('show me') || qLower.includes('navigate to') || qLower.includes('switch to')) {
+  // 12. ACTION: Navigation Commands
+  if (
+    qLower.includes('go to') ||
+    qLower.includes('open') ||
+    qLower.includes('show me') ||
+    qLower.includes('navigate to') ||
+    qLower.includes('switch to')
+  ) {
     let targetTab: string | null = null;
     if (qLower.includes('dashboard')) targetTab = 'dashboard';
     else if (qLower.includes('resume') || qLower.includes('candidate')) targetTab = 'resumes';
@@ -1429,13 +1874,13 @@ Note: Match scores serve strictly as assistive aids for human interviewers. Fina
     }
   }
 
-  // 5. ACTION: Candidate Comparison Intent
+  // 13. ACTION: Candidate Comparison Intent
   if (
     (qLower.includes('compare') || qLower.includes('comparison')) &&
     context.candidates.length > 0 &&
     context.jobs.length > 0
   ) {
-    const job = context.jobs.find(j => qLower.includes(j.title.toLowerCase())) || context.jobs[0];
+    const job = findMatchingJob(userQuery, context.jobs) || context.jobs[0];
     const candidateSubset = context.candidates.slice(0, 3);
 
     toolCalls.push({
@@ -1448,7 +1893,8 @@ Note: Match scores serve strictly as assistive aids for human interviewers. Fina
     });
 
     const comparison = await compareCandidates(candidateSubset, job);
-    const comparisonText = `Candidate Comparison for ${job.title}\n\n${cleanResponseText(comparison.summaryNote)}\n\n` +
+    const comparisonText =
+      `Candidate Comparison for ${job.title}\n\n${cleanResponseText(comparison.summaryNote)}\n\n` +
       comparison.candidates
         .map(
           c =>
@@ -1468,13 +1914,16 @@ Note: Match scores serve strictly as assistive aids for human interviewers. Fina
     };
   }
 
-  // 6. ACTION: Interview Question Generation Intent
+  // 14. ACTION: Interview Question Generation Intent
   if (
-    (qLower.includes('interview question') || qLower.includes('interview questions') || qLower.includes('interview kit') || qLower.includes('interview guide')) &&
+    (qLower.includes('interview question') ||
+      qLower.includes('interview questions') ||
+      qLower.includes('interview kit') ||
+      qLower.includes('interview guide')) &&
     context.jobs.length > 0
   ) {
-    const matchedJob = context.jobs.find(j => qLower.includes(j.title.toLowerCase())) || context.jobs[0];
-    const matchedCandidate = context.candidates.find(c => qLower.includes(c.name.toLowerCase()));
+    const matchedJob = findMatchingJob(userQuery, context.jobs) || context.jobs[0];
+    const matchedCandidate = findMatchingCandidate(userQuery, context.candidates);
 
     toolCalls.push({
       toolName: 'generate_interview_questions',
@@ -1506,7 +1955,78 @@ Note: Match scores serve strictly as assistive aids for human interviewers. Fina
     };
   }
 
-  // 7. HR Policy Search Intent
+  // 15. SPECIFIC CANDIDATE PROFILE INQUIRY
+  const queriedCand = findMatchingCandidate(userQuery, context.candidates);
+  if (queriedCand) {
+    toolCalls.push({
+      toolName: 'get_candidate_profile',
+      input: { candidateName: queriedCand.name },
+      outputSummary: `Retrieved verified profile for ${queriedCand.name}.`,
+    });
+
+    const currentStatus = queriedCand.status || 'Applied';
+    const profileText = `Verified Candidate Profile for ${queriedCand.name}:
+
+• Pipeline Stage: ${currentStatus}${queriedCand.notes && queriedCand.notes.length > 0 ? ` (Latest Note: "${queriedCand.notes[queriedCand.notes.length - 1]}")` : ''}
+• Professional Headline: ${queriedCand.summary}
+• Location: ${queriedCand.location} | Contact: ${queriedCand.email}
+• Verified Technical Skills: ${queriedCand.skills.join(', ')}
+• Experience:
+${queriedCand.experience.map(e => `  - ${e.title} at ${e.company} (${e.duration}): ${e.responsibilities[0] || ''}`).join('\n')}
+• Education: ${queriedCand.education.map(ed => `${ed.degree}, ${ed.institution} (${ed.year})`).join('; ')}
+${queriedCand.certifications && queriedCand.certifications.length > 0 ? `• Certifications: ${queriedCand.certifications.join(', ')}\n` : ''}${queriedCand.projects && queriedCand.projects.length > 0 ? `• Key Project: ${queriedCand.projects[0].name} — ${queriedCand.projects[0].description}` : ''}
+
+[Source: ${queriedCand.fileName || queriedCand.name + '_Resume.pdf'}, Section: Candidate Profile]`;
+
+    return {
+      text: cleanResponseText(profileText),
+      toolCalls,
+      sources: [
+        {
+          documentTitle: queriedCand.fileName || `${queriedCand.name} Resume`,
+          documentType: 'resume',
+          snippet: queriedCand.summary,
+        },
+      ],
+    };
+  }
+
+  // 16. SPECIFIC JOB INQUIRY
+  const queriedJob = findMatchingJob(userQuery, context.jobs);
+  if (queriedJob && (qLower.includes('job') || qLower.includes('position') || qLower.includes('role') || qLower.includes('requirement') || qLower.includes('tell me about'))) {
+    toolCalls.push({
+      toolName: 'get_job_description',
+      input: { jobTitle: queriedJob.title },
+      outputSummary: `Retrieved details for requisition "${queriedJob.title}".`,
+    });
+
+    const jobText = `Job Requisition Details for ${queriedJob.title}:
+
+• Department: ${queriedJob.department} | Type: ${queriedJob.employmentType}
+• Location: ${queriedJob.location} | Status: ${queriedJob.status}
+• Experience Required: ${queriedJob.experienceRequired} | Salary Range: ${queriedJob.salaryRange || 'Competitive'}
+• Summary: ${queriedJob.summary}
+• Required Skills: ${queriedJob.requiredSkills.join(', ')}
+• Preferred Skills: ${queriedJob.preferredSkills.join(', ')}
+• Key Responsibilities:
+${queriedJob.responsibilities.slice(0, 3).map(r => `  - ${r}`).join('\n')}
+
+[Source: ${queriedJob.title} Requisition, Section: Specifications]`;
+
+    return {
+      text: cleanResponseText(jobText),
+      toolCalls,
+      sources: [
+        {
+          documentTitle: `${queriedJob.title} Requisition`,
+          documentType: 'job_description',
+          snippet: queriedJob.summary,
+        },
+      ],
+    };
+  }
+
+  // 17. HR Policy Search Intent
   if (
     qLower.includes('policy') ||
     qLower.includes('notice period') ||
@@ -1544,13 +2064,13 @@ Note: Match scores serve strictly as assistive aids for human interviewers. Fina
     };
   }
 
-  // 8. Default: RAG Search across resumes and job descriptions
+  // 18. Default: Grounded RAG Search across Resumes, Jobs, and Policies
   const searchResults = await globalVectorStore.similaritySearch(userQuery, {
     topK: 5,
   });
 
   toolCalls.push({
-    toolName: 'search_resumes',
+    toolName: 'search_knowledge_base',
     input: { query: userQuery },
     outputSummary: `Searched knowledge base vector index, found ${searchResults.length} relevant chunks.`,
   });

@@ -80,6 +80,18 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     offer: candidates.filter(c => c.status === 'Offer Sent' || c.status === 'Hired').length,
   };
 
+  const [selectedStage, setSelectedStage] = useState<string>('all');
+
+  const filteredCandidates = candidates.filter(c => {
+    if (selectedStage === 'all') return true;
+    if (selectedStage === 'applied') return !c.status || c.status === 'Applied';
+    if (selectedStage === 'screening') return c.status === 'Screening';
+    if (selectedStage === 'shortlisted') return c.status === 'Shortlisted';
+    if (selectedStage === 'interviewing') return c.status === 'Technical Interview' || c.status === 'Executive Review';
+    if (selectedStage === 'offer') return c.status === 'Offer Sent' || c.status === 'Hired';
+    return true;
+  });
+
   const upcomingInterviews = stats?.upcomingInterviews || interviews;
 
   return (
@@ -167,6 +179,30 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           </button>
 
           <button
+            onClick={() => handleDispatchAgentAction('Shortlist Sarah Jenkins for Front-End UI Engineer position')}
+            className="px-2.5 py-1.5 rounded-lg bg-white border border-amber-200 hover:border-amber-400 text-slate-800 hover:text-amber-700 text-xs font-medium whitespace-nowrap shadow-2xs transition flex items-center gap-1.5 cursor-pointer"
+          >
+            <UserCheck className="w-3.5 h-3.5 text-amber-600" />
+            <span>Shortlist Sarah Jenkins</span>
+          </button>
+
+          <button
+            onClick={() => handleDispatchAgentAction('Move David Kumar to Technical Interview stage')}
+            className="px-2.5 py-1.5 rounded-lg bg-white border border-purple-200 hover:border-purple-400 text-slate-800 hover:text-purple-700 text-xs font-medium whitespace-nowrap shadow-2xs transition flex items-center gap-1.5 cursor-pointer"
+          >
+            <CheckCircle2 className="w-3.5 h-3.5 text-purple-600" />
+            <span>Advance David Kumar</span>
+          </button>
+
+          <button
+            onClick={() => handleDispatchAgentAction('Draft formal offer letter for Priya Sharma for Full-Stack role')}
+            className="px-2.5 py-1.5 rounded-lg bg-white border border-emerald-200 hover:border-emerald-400 text-slate-800 hover:text-emerald-700 text-xs font-medium whitespace-nowrap shadow-2xs transition flex items-center gap-1.5 cursor-pointer"
+          >
+            <Mail className="w-3.5 h-3.5 text-emerald-600" />
+            <span>Draft Offer for Priya</span>
+          </button>
+
+          <button
             onClick={() => handleDispatchAgentAction('Create job for Senior DevOps Engineer with Docker, Kubernetes, AWS')}
             className="px-2.5 py-1.5 rounded-lg bg-white border border-blue-200 hover:border-blue-400 text-slate-800 hover:text-blue-700 text-xs font-medium whitespace-nowrap shadow-2xs transition flex items-center gap-1.5 cursor-pointer"
           >
@@ -175,19 +211,11 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           </button>
 
           <button
-            onClick={() => handleDispatchAgentAction('Draft interview invitation email for Priya Sharma')}
-            className="px-2.5 py-1.5 rounded-lg bg-white border border-teal-200 hover:border-teal-400 text-slate-800 hover:text-teal-700 text-xs font-medium whitespace-nowrap shadow-2xs transition flex items-center gap-1.5 cursor-pointer"
-          >
-            <Mail className="w-3.5 h-3.5 text-teal-600" />
-            <span>Draft Email Invite</span>
-          </button>
-
-          <button
             onClick={() => handleDispatchAgentAction('Compare Priya Sharma and Alex Chen for Senior Full-Stack opening')}
             className="px-2.5 py-1.5 rounded-lg bg-white border border-purple-200 hover:border-purple-400 text-slate-800 hover:text-purple-700 text-xs font-medium whitespace-nowrap shadow-2xs transition flex items-center gap-1.5 cursor-pointer"
           >
             <Sparkles className="w-3.5 h-3.5 text-purple-600" />
-            <span>Compare Top Full-Stack Candidates</span>
+            <span>Compare Candidates</span>
           </button>
         </div>
       </div>
@@ -394,103 +422,187 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               </button>
             </div>
 
+            {/* Pipeline Stage Filter Pills */}
+            <div className="flex items-center gap-1.5 overflow-x-auto pb-3 border-b border-slate-100">
+              <button
+                onClick={() => setSelectedStage('all')}
+                className={`px-2.5 py-1 rounded-md text-xs font-medium whitespace-nowrap transition cursor-pointer ${
+                  selectedStage === 'all'
+                    ? 'bg-slate-900 text-white'
+                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                }`}
+              >
+                All ({candidates.length})
+              </button>
+              <button
+                onClick={() => setSelectedStage('applied')}
+                className={`px-2.5 py-1 rounded-md text-xs font-medium whitespace-nowrap transition cursor-pointer ${
+                  selectedStage === 'applied'
+                    ? 'bg-slate-800 text-white'
+                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                }`}
+              >
+                Applied ({pipeline.applied})
+              </button>
+              <button
+                onClick={() => setSelectedStage('screening')}
+                className={`px-2.5 py-1 rounded-md text-xs font-medium whitespace-nowrap transition cursor-pointer ${
+                  selectedStage === 'screening'
+                    ? 'bg-blue-600 text-white'
+                    : 'bg-blue-50 text-blue-700 hover:bg-blue-100'
+                }`}
+              >
+                Screening ({pipeline.screening})
+              </button>
+              <button
+                onClick={() => setSelectedStage('shortlisted')}
+                className={`px-2.5 py-1 rounded-md text-xs font-medium whitespace-nowrap transition cursor-pointer ${
+                  selectedStage === 'shortlisted'
+                    ? 'bg-amber-600 text-white'
+                    : 'bg-amber-50 text-amber-800 hover:bg-amber-100'
+                }`}
+              >
+                Shortlisted ({pipeline.shortlisted})
+              </button>
+              <button
+                onClick={() => setSelectedStage('interviewing')}
+                className={`px-2.5 py-1 rounded-md text-xs font-medium whitespace-nowrap transition cursor-pointer ${
+                  selectedStage === 'interviewing'
+                    ? 'bg-indigo-600 text-white'
+                    : 'bg-indigo-50 text-indigo-700 hover:bg-indigo-100'
+                }`}
+              >
+                Interviewing ({pipeline.interviewing})
+              </button>
+              <button
+                onClick={() => setSelectedStage('offer')}
+                className={`px-2.5 py-1 rounded-md text-xs font-medium whitespace-nowrap transition cursor-pointer ${
+                  selectedStage === 'offer'
+                    ? 'bg-emerald-600 text-white'
+                    : 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
+                }`}
+              >
+                Offer / Hired ({pipeline.offer})
+              </button>
+            </div>
+
             <div className="divide-y divide-slate-100">
-              {candidates.slice(0, 4).map(candidate => (
-                <div
-                  key={candidate.id}
-                  className="py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs"
-                >
-                  <div className="space-y-1.5 min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span className="font-semibold text-slate-900 text-sm">
-                        {candidate.name}
-                      </span>
-                      {/* Pipeline Status Tag */}
-                      <span
-                        className={`text-[10px] font-semibold px-2 py-0.5 rounded border ${
-                          candidate.status === 'Shortlisted'
-                            ? 'bg-amber-50 text-amber-800 border-amber-200'
-                            : candidate.status === 'Technical Interview' || candidate.status === 'Executive Review'
-                            ? 'bg-indigo-50 text-indigo-800 border-indigo-200'
-                            : candidate.status === 'Offer Sent' || candidate.status === 'Hired'
-                            ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
-                            : candidate.status === 'Screening'
-                            ? 'bg-blue-50 text-blue-800 border-blue-200'
-                            : 'bg-slate-50 text-slate-600 border-slate-200'
-                        }`}
-                      >
-                        {candidate.status || 'Applied'}
-                      </span>
-                      <span className="text-[11px] text-slate-400 hidden md:inline">
-                        {candidate.location}
-                      </span>
-                    </div>
-
-                    <div className="flex flex-wrap gap-1">
-                      {candidate.skills.slice(0, 4).map(skill => (
-                        <span
-                          key={skill}
-                          className="px-2 py-0.5 rounded bg-slate-100 text-slate-700 text-[10px]"
-                        >
-                          {skill}
+              {filteredCandidates.length > 0 ? (
+                filteredCandidates.map(candidate => (
+                  <div
+                    key={candidate.id}
+                    className="py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs"
+                  >
+                    <div className="space-y-1.5 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="font-semibold text-slate-900 text-sm">
+                          {candidate.name}
                         </span>
-                      ))}
+                        {/* Pipeline Status Tag */}
+                        <span
+                          className={`text-[10px] font-semibold px-2 py-0.5 rounded border ${
+                            candidate.status === 'Shortlisted'
+                              ? 'bg-amber-50 text-amber-800 border-amber-200'
+                              : candidate.status === 'Technical Interview' || candidate.status === 'Executive Review'
+                              ? 'bg-indigo-50 text-indigo-800 border-indigo-200'
+                              : candidate.status === 'Offer Sent' || candidate.status === 'Hired'
+                              ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                              : candidate.status === 'Screening'
+                              ? 'bg-blue-50 text-blue-800 border-blue-200'
+                              : candidate.status === 'Rejected'
+                              ? 'bg-rose-50 text-rose-800 border-rose-200'
+                              : 'bg-slate-50 text-slate-600 border-slate-200'
+                          }`}
+                        >
+                          {candidate.status || 'Applied'}
+                        </span>
+                        <span className="text-[11px] text-slate-400 hidden md:inline">
+                          {candidate.location}
+                        </span>
+                      </div>
+
+                      <div className="flex flex-wrap gap-1">
+                        {candidate.skills.slice(0, 4).map(skill => (
+                          <span
+                            key={skill}
+                            className="px-2 py-0.5 rounded bg-slate-100 text-slate-700 text-[10px]"
+                          >
+                            {skill}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Agent Action Buttons per Candidate */}
+                    <div className="flex items-center gap-1.5 shrink-0 flex-wrap">
+                      <button
+                        onClick={() =>
+                          handleDispatchAgentAction(
+                            `Shortlist candidate ${candidate.name} and provide summary of key qualifications.`
+                          )
+                        }
+                        className="px-2 py-1 rounded bg-amber-50 hover:bg-amber-100 border border-amber-200 text-amber-800 text-[11px] font-medium transition cursor-pointer"
+                        title="Dispatch Shortlist action to Agent"
+                      >
+                        ⚡ Shortlist
+                      </button>
+
+                      <button
+                        onClick={() =>
+                          handleDispatchAgentAction(
+                            `Schedule technical interview for ${candidate.name} with meeting link.`
+                          )
+                        }
+                        className="px-2 py-1 rounded bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 text-indigo-800 text-[11px] font-medium transition cursor-pointer"
+                        title="Dispatch Schedule action to Agent"
+                      >
+                        ⚡ Schedule
+                      </button>
+
+                      <button
+                        onClick={() =>
+                          handleDispatchAgentAction(
+                            `Draft personalized interview invitation email for ${candidate.name}.`
+                          )
+                        }
+                        className="px-2 py-1 rounded bg-teal-50 hover:bg-teal-100 border border-teal-200 text-teal-800 text-[11px] font-medium transition cursor-pointer"
+                        title="Dispatch Email Draft action to Agent"
+                      >
+                        ⚡ Draft Email
+                      </button>
+
+                      <button
+                        onClick={() =>
+                          handleDispatchAgentAction(
+                            `Advance candidate ${candidate.name} to the next recruitment stage.`
+                          )
+                        }
+                        className="px-2 py-1 rounded bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-emerald-800 text-[11px] font-medium transition cursor-pointer"
+                        title="Advance pipeline stage with Copilot"
+                      >
+                        ⚡ Advance
+                      </button>
+
+                      <button
+                        onClick={() => {
+                          if (jobs.length > 0 && onSelectCandidateForAnalysis) {
+                            onSelectCandidateForAnalysis(candidate.id, jobs[0].id);
+                          } else {
+                            setActiveTab('analysis');
+                          }
+                        }}
+                        className="px-2 py-1 rounded bg-slate-100 text-slate-700 hover:bg-slate-200 text-[11px] font-medium transition cursor-pointer"
+                      >
+                        Analyze Match
+                      </button>
                     </div>
                   </div>
-
-                  {/* Agent Action Buttons per Candidate */}
-                  <div className="flex items-center gap-1.5 shrink-0 flex-wrap">
-                    <button
-                      onClick={() =>
-                        handleDispatchAgentAction(
-                          `Shortlist candidate ${candidate.name} and provide summary of key qualifications.`
-                        )
-                      }
-                      className="px-2 py-1 rounded bg-amber-50 hover:bg-amber-100 border border-amber-200 text-amber-800 text-[11px] font-medium transition cursor-pointer"
-                      title="Dispatch Shortlist action to Agent"
-                    >
-                      ⚡ Shortlist
-                    </button>
-
-                    <button
-                      onClick={() =>
-                        handleDispatchAgentAction(
-                          `Schedule technical interview for ${candidate.name} with meeting link.`
-                        )
-                      }
-                      className="px-2 py-1 rounded bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 text-indigo-800 text-[11px] font-medium transition cursor-pointer"
-                      title="Dispatch Schedule action to Agent"
-                    >
-                      ⚡ Schedule
-                    </button>
-
-                    <button
-                      onClick={() =>
-                        handleDispatchAgentAction(
-                          `Draft personalized interview invitation email for ${candidate.name}.`
-                        )
-                      }
-                      className="px-2 py-1 rounded bg-teal-50 hover:bg-teal-100 border border-teal-200 text-teal-800 text-[11px] font-medium transition cursor-pointer"
-                      title="Dispatch Email Draft action to Agent"
-                    >
-                      ⚡ Draft Email
-                    </button>
-
-                    <button
-                      onClick={() => {
-                        if (jobs.length > 0 && onSelectCandidateForAnalysis) {
-                          onSelectCandidateForAnalysis(candidate.id, jobs[0].id);
-                        } else {
-                          setActiveTab('analysis');
-                        }
-                      }}
-                      className="px-2 py-1 rounded bg-slate-100 text-slate-700 hover:bg-slate-200 text-[11px] font-medium transition cursor-pointer"
-                    >
-                      Analyze Match
-                    </button>
-                  </div>
+                ))
+              ) : (
+                <div className="text-center py-6 text-slate-400 text-xs">
+                  No candidates currently in "{selectedStage}" stage.
                 </div>
-              ))}
+              )}
             </div>
           </div>
 
@@ -536,14 +648,38 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                     {job.summary}
                   </p>
 
-                  <div className="pt-2 border-t border-slate-200/80 flex items-center justify-between text-xs">
+                  <div className="pt-2 border-t border-slate-200/80 flex items-center justify-between text-xs flex-wrap gap-2">
                     <span className="text-slate-500">Exp: {job.experienceRequired}</span>
-                    <button
-                      onClick={() => setActiveTab('comparison', { jobId: job.id })}
-                      className="text-blue-600 hover:text-blue-800 font-medium cursor-pointer"
-                    >
-                      Compare Candidates →
-                    </button>
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        onClick={() =>
+                          handleDispatchAgentAction(
+                            `Analyze and rank matching candidates for ${job.title} requisition.`
+                          )
+                        }
+                        className="px-2 py-1 rounded bg-blue-50 text-blue-700 hover:bg-blue-100 font-medium transition cursor-pointer text-[11px]"
+                        title="Rank candidates using Copilot"
+                      >
+                        ⚡ Rank Matches
+                      </button>
+                      <button
+                        onClick={() =>
+                          handleDispatchAgentAction(
+                            `Generate structured interview questions for ${job.title}.`
+                          )
+                        }
+                        className="px-2 py-1 rounded bg-indigo-50 text-indigo-700 hover:bg-indigo-100 font-medium transition cursor-pointer text-[11px]"
+                        title="Generate interview kit with Copilot"
+                      >
+                        ⚡ Interview Kit
+                      </button>
+                      <button
+                        onClick={() => setActiveTab('comparison', { jobId: job.id })}
+                        className="text-slate-600 hover:text-slate-900 font-medium cursor-pointer text-[11px]"
+                      >
+                        Compare →
+                      </button>
+                    </div>
                   </div>
                 </div>
               ))}
