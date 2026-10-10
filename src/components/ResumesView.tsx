@@ -207,7 +207,24 @@ export const ResumesView: React.FC<ResumesViewProps> = ({
                   >
                     <div className="flex items-start justify-between">
                       <div>
-                        <h4 className="font-semibold text-sm text-slate-900">{c.name}</h4>
+                        <div className="flex items-center gap-2">
+                          <h4 className="font-semibold text-sm text-slate-900">{c.name}</h4>
+                          <span
+                            className={`text-[10px] font-semibold px-2 py-0.5 rounded border ${
+                              c.status === 'Shortlisted'
+                                ? 'bg-amber-50 text-amber-800 border-amber-200'
+                                : c.status === 'Technical Interview' || c.status === 'Executive Review'
+                                ? 'bg-indigo-50 text-indigo-800 border-indigo-200'
+                                : c.status === 'Offer Sent' || c.status === 'Hired'
+                                ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                                : c.status === 'Screening'
+                                ? 'bg-blue-50 text-blue-800 border-blue-200'
+                                : 'bg-slate-50 text-slate-600 border-slate-200'
+                            }`}
+                          >
+                            {c.status || 'Applied'}
+                          </span>
+                        </div>
                         <p className="text-xs text-slate-500 mt-0.5">{c.location}</p>
                       </div>
                       <span className="text-[11px] text-slate-400 font-mono">
@@ -258,6 +275,30 @@ export const ResumesView: React.FC<ResumesViewProps> = ({
                     <span>·</span>
                     <span>{selectedCandidate.location}</span>
                   </div>
+
+                  <div className="flex items-center gap-2 mt-2">
+                    <span className="text-xs font-semibold text-slate-600">Pipeline Stage:</span>
+                    <select
+                      value={selectedCandidate.status || 'Applied'}
+                      onChange={async e => {
+                        const newStatus = e.target.value as any;
+                        await api.updateCandidateStatus(selectedCandidate.id, newStatus);
+                        onRefresh();
+                        setSelectedCandidate({ ...selectedCandidate, status: newStatus });
+                      }}
+                      className="text-xs font-semibold px-2.5 py-1 rounded-md border border-slate-300 bg-white text-slate-800 focus:outline-none focus:ring-1 focus:ring-blue-500 cursor-pointer shadow-2xs"
+                    >
+                      <option value="Applied">Applied</option>
+                      <option value="Screening">Screening</option>
+                      <option value="Shortlisted">Shortlisted</option>
+                      <option value="Technical Interview">Technical Interview</option>
+                      <option value="Executive Review">Executive Review</option>
+                      <option value="Offer Sent">Offer Sent</option>
+                      <option value="Hired">Hired</option>
+                      <option value="Rejected">Rejected</option>
+                    </select>
+                  </div>
+
                   <div className="text-[11px] text-slate-400 mt-1">
                     Source: {selectedCandidate.fileName} · Indexed on{' '}
                     {new Date(selectedCandidate.uploadedAt).toLocaleDateString()}

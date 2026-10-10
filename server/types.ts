@@ -1,5 +1,15 @@
 export type DocumentType = 'resume' | 'job_description' | 'hr_policy';
 
+export type CandidateStatus =
+  | 'Applied'
+  | 'Screening'
+  | 'Shortlisted'
+  | 'Technical Interview'
+  | 'Executive Review'
+  | 'Offer Sent'
+  | 'Hired'
+  | 'Rejected';
+
 export interface Candidate {
   id: string;
   name: string;
@@ -7,6 +17,8 @@ export interface Candidate {
   phone: string;
   location: string;
   summary: string;
+  status?: CandidateStatus;
+  notes?: string[];
   education: Array<{
     degree: string;
     institution: string;
@@ -159,6 +171,46 @@ export interface GroundedRAGAnswer {
   }>;
 }
 
+export interface ScheduledInterview {
+  id: string;
+  candidateId: string;
+  candidateName: string;
+  jobId?: string;
+  jobTitle?: string;
+  interviewType: 'Phone Screen' | 'Technical Round' | 'Behavioral Round' | 'Executive Review';
+  scheduledTime: string;
+  interviewer: string;
+  meetingLink: string;
+  status: 'Scheduled' | 'Completed' | 'Cancelled';
+  notes?: string;
+  createdAt: string;
+}
+
+export interface CandidateOutreachDraft {
+  id: string;
+  candidateId: string;
+  candidateName: string;
+  candidateEmail: string;
+  subject: string;
+  body: string;
+  type: 'Interview Invitation' | 'Offer Letter' | 'Follow-up' | 'Status Update';
+  createdAt: string;
+}
+
+export interface AgentActionPayload {
+  type:
+    | 'job_created'
+    | 'candidate_added'
+    | 'candidate_status_updated'
+    | 'interview_scheduled'
+    | 'outreach_drafted'
+    | 'analysis_completed'
+    | 'interview_guide_generated'
+    | 'comparison_completed'
+    | 'navigate';
+  data: any;
+}
+
 export interface AgentChatMessage {
   id: string;
   sender: 'user' | 'agent';
@@ -174,11 +226,21 @@ export interface AgentChatMessage {
     documentType: string;
     snippet: string;
   }>;
+  actionPayload?: AgentActionPayload;
 }
 
 export interface ActivityLog {
   id: string;
-  type: 'upload_resume' | 'create_job' | 'analyze_resume' | 'generate_questions' | 'compare_candidates' | 'policy_query';
+  type:
+    | 'upload_resume'
+    | 'create_job'
+    | 'analyze_resume'
+    | 'generate_questions'
+    | 'compare_candidates'
+    | 'policy_query'
+    | 'update_status'
+    | 'schedule_interview'
+    | 'outreach_draft';
   title: string;
   description: string;
   timestamp: string;

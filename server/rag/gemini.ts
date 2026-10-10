@@ -9,8 +9,10 @@ import {
   RetrievalResult,
   GroundedRAGAnswer,
   AgentChatMessage,
+  AgentActionPayload,
 } from '../types';
 import { globalVectorStore } from './vectorStore';
+import { appStore } from '../store';
 
 let geminiClient: GoogleGenAI | null = null;
 let geminiApiDisabled = false;
@@ -971,7 +973,7 @@ User Question:
 }
 
 /**
- * Tool-Using Recruitment Support Agent
+ * Tool-Using Recruitment Support Agent with Real Action Execution
  */
 export async function runRecruitmentAgent(
   userQuery: string,
@@ -985,13 +987,526 @@ export async function runRecruitmentAgent(
   text: string;
   toolCalls: Array<{ toolName: string; input: any; outputSummary: string }>;
   sources: Array<{ documentTitle: string; documentType: string; snippet: string }>;
+  actionPayload?: AgentActionPayload;
 }> {
   const toolCalls: Array<{ toolName: string; input: any; outputSummary: string }> = [];
   const sources: Array<{ documentTitle: string; documentType: string; snippet: string }> = [];
 
   const qLower = userQuery.toLowerCase();
 
-  // 1. HR Policy Search Intent
+  // 1. ACTION: Shortlist or Advance / Update Candidate Pipeline Stage
+  if (
+    qLower.includes('shortlist') ||
+    qLower.includes('advance') ||
+    qLower.includes('reject') ||
+    qLower.includes('move stage') ||
+    qLower.includes('move candidate') ||
+    qLower.includes('update status') ||
+    qLower.includes('hire') ||
+    qLower.includes('offer sent')
+  ) {
+    const cand = context.candidates.find(c => qLower.includes(c.name.toLowerCase())) || context.candidates[0];
+
+    let newStatus: any = 'Shortlisted';
+    if (qLower.includes('reject')) newStatus = 'Rejected';
+    else if (qLower.includes('screen')) newStatus = 'Screening';
+    else if (qLower.includes('tech') || qLower.includes('technical')) newStatus = 'Technical Interview';
+    else if (qLower.includes('exec') || qLower.includes('executive') || qLower.includes('final round')) newStatus = 'Executive Review';
+    else if (qLower.includes('offer') || qLower.includes('hire')) newStatus = 'Offer Sent';
+    else if (qLower.includes('shortlist')) newStatus = 'Shortlisted';
+
+    const previousStatus = cand.status || 'Applied';
+    const note = `Updated to ${newStatus} stage via TalentScout AI Agent directive.`;
+    const updated = appStore.updateCandidateStatus(cand.id, newStatus, note);
+
+    toolCalls.push({
+      toolName: 'update_candidate_pipeline_stage',
+      input: { candidateId: cand.id, candidateName: cand.name, previousStatus, newStatus },
+      outputSummary: `Moved ${cand.name} from "${previousStatus}" to "${newStatus}" in live talent pipeline.`,
+    });
+
+    const text = `I have updated the recruitment pipeline for ${cand.name}. Their status has been updated from "${previousStatus}" to "${newStatus}". This change has been recorded in the database and is reflected live on your dashboard pipeline metrics.`;
+
+    return {
+      text: cleanResponseText(text),
+      toolCalls,
+      sources,
+      actionPayload: {
+        type: 'candidate_status_updated',
+        data: {
+          candidate: updated || cand,
+          previousStatus,
+          newStatus,
+          note,
+        },
+      },
+    };
+  }
+
+  // 2. ACTION: Schedule Interview & Calendar Invite
+  if (
+    qLower.includes('schedule interview') ||
+    qLower.includes('book interview') ||
+    qLower.includes('setup interview') ||
+    qLower.includes('set up interview') ||
+    qLower.includes('schedule a call') ||
+    qLower.includes('schedule phone screen') ||
+    qLower.includes('schedule technical round')
+  ) {
+    const cand = context.candidates.find(c => qLower.includes(c.name.toLowerCase())) || context.candidates[0];
+    const job = context.jobs.find(j => qLower.includes(j.title.toLowerCase())) || context.jobs[0];
+
+    let interviewType: 'Phone Screen' | 'Technical Round' | 'Behavioral Round' | 'Executive Review' = 'Technical Round';
+    if (qLower.includes('phone') || qLower.includes('screen')) interviewType = 'Phone Screen';
+    else if (qLower.includes('behavioral') || qLower.includes('values') || qLower.includes('star')) interviewType = 'Behavioral Round';
+    else if (qLower.includes('exec') || qLower.includes('vp') || qLower.includes('final')) interviewType = 'Executive Review';
+
+    const futureDate = new Date(Date.now() + 86400000 * 2);
+    futureDate.setHours(14, 0, 0, 0);
+
+    const interviewId = `int-${Date.now()}`;
+    const meetCode = `tsc-${cand.name.toLowerCase().slice(0, 3)}-${Math.floor(100 + Math.random() * 900)}`;
+    const newInterview = {
+      id: interviewId,
+      candidateId: cand.id,
+      candidateName: cand.name,
+      jobId: job.id,
+      jobTitle: job.title,
+      interviewType,
+      scheduledTime: futureDate.toISOString(),
+      interviewer: interviewType === 'Technical Round' ? 'Senior Technical Lead' : (interviewType === 'Executive Review' ? 'VP of Engineering' : 'HR Talent Partner'),
+      meetingLink: `https://meet.google.com/${meetCode}`,
+      status: 'Scheduled' as const,
+      notes: `Evaluating competencies against ${job.title} job specification and company STAR rubric.`,
+      createdAt: new Date().toISOString(),
+    };
+
+    appStore.addInterview(newInterview);
+
+    toolCalls.push({
+      toolName: 'schedule_candidate_interview',
+      input: { candidateName: cand.name, jobTitle: job.title, interviewType, scheduledTime: newInterview.scheduledTime },
+      outputSummary: `Scheduled ${interviewType} for ${cand.name} on ${futureDate.toLocaleDateString()} with meeting link generated.`,
+    });
+
+    const text = `I have scheduled the ${interviewType} for ${cand.name} regarding the "${job.title}" requisition.
+• Date & Time: ${futureDate.toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+• Interviewer: ${newInterview.interviewer}
+• Secure Meeting Link: ${newInterview.meetingLink}
+• Status: Confirmed & synced with recruitment calendar and dashboard.`;
+
+    return {
+      text: cleanResponseText(text),
+      toolCalls,
+      sources,
+      actionPayload: {
+        type: 'interview_scheduled',
+        data: newInterview,
+      },
+    };
+  }
+
+  // 3. ACTION: Draft Candidate Outreach Email / Offer Letter
+  if (
+    qLower.includes('draft email') ||
+    qLower.includes('draft outreach') ||
+    qLower.includes('write email') ||
+    qLower.includes('invitation email') ||
+    qLower.includes('draft offer') ||
+    qLower.includes('offer letter') ||
+    qLower.includes('rejection email')
+  ) {
+    const cand = context.candidates.find(c => qLower.includes(c.name.toLowerCase())) || context.candidates[0];
+    const job = context.jobs.find(j => qLower.includes(j.title.toLowerCase())) || context.jobs[0];
+
+    const isOffer = qLower.includes('offer');
+    const isRejection = qLower.includes('rejection') || qLower.includes('decline');
+    const emailType = isOffer ? 'Offer Letter' : (isRejection ? 'Status Update' : 'Interview Invitation');
+
+    let subject = `Invitation to Interview: ${job.title} at TalentScout Global`;
+    let body = `Dear ${cand.name},
+
+Thank you for your interest in the ${job.title} opening at TalentScout Global. Our engineering and recruitment team was thoroughly impressed by your verified background, particularly your hands-on experience with ${cand.skills.slice(0, 3).join(', ')}.
+
+We would love to invite you to the next stage of our interview process: a 45-minute technical conversation where we will discuss your prior architecture work and dive into real-world engineering challenges.
+
+Please let us know your availability over the next few business days, or select a time directly via your interview portal.
+
+We look forward to speaking with you!
+
+Warm regards,
+Talent Acquisition Team
+TalentScout Global`;
+
+    if (isOffer) {
+      subject = `Formal Offer of Employment: ${job.title} at TalentScout Global`;
+      body = `Dear ${cand.name},
+
+On behalf of TalentScout Global, I am thrilled to extend an official offer of employment for the position of ${job.title}!
+
+Our team was exceptionally impressed by your technical depth, problem-solving skills, and alignment with our collaborative engineering values throughout the interview stages.
+
+Offer Highlights:
+• Position: ${job.title} (${job.employmentType})
+• Compensation: ${job.salaryRange || '$145,000 USD base annual salary'}
+• Home Office Stipend: $1,200 USD setup allowance + $100/mo remote tech allowance
+• Benefits: Comprehensive health, vision, and 401(k) matching
+
+Please review the attached formal offer letter and feel free to reach out with any questions. We are excited about the prospect of building the future together!
+
+Best regards,
+Head of Talent Acquisition
+TalentScout Global`;
+    } else if (isRejection) {
+      subject = `Update on your application for ${job.title} at TalentScout Global`;
+      body = `Dear ${cand.name},
+
+Thank you for taking the time to speak with our team regarding the ${job.title} role. We genuinely appreciate the opportunity to learn about your background and experience.
+
+While your background in software engineering is commendable, we have decided to advance other candidates whose specific experience more closely aligns with our immediate architectural needs for this role.
+
+We will keep your resume in our talent directory for future openings that match your skills. We wish you continued success in your professional endeavors.
+
+Sincerely,
+Talent Acquisition Team
+TalentScout Global`;
+    }
+
+    const draft = {
+      id: `draft-${Date.now()}`,
+      candidateId: cand.id,
+      candidateName: cand.name,
+      candidateEmail: cand.email,
+      subject,
+      body,
+      type: emailType as any,
+      createdAt: new Date().toISOString(),
+    };
+
+    appStore.addOutreachDraft(draft);
+
+    toolCalls.push({
+      toolName: 'draft_candidate_outreach',
+      input: { candidateName: cand.name, type: emailType, subject },
+      outputSummary: `Generated customized ${emailType} email for ${cand.name}.`,
+    });
+
+    const text = `I have drafted a personalized ${emailType} email for ${cand.name}:
+
+Subject: ${subject}
+
+${body}
+
+This draft has been stored in your recruitment workspace. You can copy the message or send it directly.`;
+
+    return {
+      text: cleanResponseText(text),
+      toolCalls,
+      sources,
+      actionPayload: {
+        type: 'outreach_drafted',
+        data: draft,
+      },
+    };
+  }
+
+  // 4. ACTION: Create / Post a New Job Requisition
+  if (
+    qLower.includes('create job') ||
+    qLower.includes('post job') ||
+    qLower.includes('add job') ||
+    qLower.includes('new job') ||
+    qLower.includes('create requisition') ||
+    qLower.includes('post requisition')
+  ) {
+    // Extract job title
+    let jobTitle = 'Senior Cloud Infrastructure Engineer';
+    const forMatch = userQuery.match(/(?:for|named|titled|as)\s+([^,.;\n]+?)(?:with|in|requiring|experience|$)/i);
+    if (forMatch && forMatch[1].trim().length > 2) {
+      jobTitle = forMatch[1].trim().replace(/^a\s+/i, '').replace(/^an\s+/i, '');
+    } else {
+      const titleMatch = userQuery.match(/(?:engineer|developer|architect|designer|manager|specialist|analyst)/i);
+      if (titleMatch) {
+        jobTitle = userQuery.split(/(?:create|post|add|new)\s+(?:job|requisition)?/i)[1]?.split(/(?:with|in|$)/i)[0]?.trim() || 'Software Engineer';
+      }
+    }
+
+    // Extract skills mentioned in prompt or use smart defaults
+    const candidateSkillsFound: string[] = [];
+    const techPool = ['Python', 'Docker', 'Kubernetes', 'AWS', 'GCP', 'Terraform', 'React', 'Node.js', 'PostgreSQL', 'TypeScript', 'CI/CD', 'Kafka', 'GraphQL'];
+    for (const tech of techPool) {
+      if (qLower.includes(tech.toLowerCase())) {
+        candidateSkillsFound.push(tech);
+      }
+    }
+    const finalSkills = candidateSkillsFound.length > 0 ? candidateSkillsFound : ['AWS', 'Docker', 'Kubernetes', 'CI/CD Pipelines', 'Linux'];
+
+    // Experience
+    let expRequired = '3+ years';
+    const expMatch = userQuery.match(/(\d+\+?\s*years?)/i);
+    if (expMatch) expRequired = expMatch[1];
+
+    const newJob: JobDescription = {
+      id: `job-${Date.now()}`,
+      title: jobTitle,
+      department: qLower.includes('product') ? 'Product' : (qLower.includes('data') ? 'Data & AI' : 'Engineering'),
+      location: 'Remote / US',
+      employmentType: 'Full-time',
+      experienceRequired: expRequired,
+      salaryRange: '$135,000 - $165,000 USD',
+      summary: `Requisition for ${jobTitle} responsible for high-throughput software delivery and scalable architecture.`,
+      responsibilities: [
+        `Architect and build production systems using ${finalSkills.slice(0, 2).join(' and ')}.`,
+        'Participate in design reviews, automated testing, and release engineering.',
+        'Collaborate with product and infrastructure teams to ensure high availability.',
+      ],
+      requiredSkills: finalSkills,
+      preferredSkills: ['Monitoring & Observability', 'Microservices Architecture'],
+      qualifications: ['Bachelor’s or Master’s in Computer Science or equivalent practical experience.', `${expRequired} in production software engineering.`],
+      createdAt: new Date().toISOString(),
+      status: 'Active',
+    };
+
+    await appStore.addJob(newJob);
+
+    toolCalls.push({
+      toolName: 'create_job',
+      input: { title: newJob.title, department: newJob.department, requiredSkills: newJob.requiredSkills },
+      outputSummary: `Created and published requisition for "${newJob.title}" into the database.`,
+    });
+
+    const text = `I have created and published the new job requisition for "${newJob.title}" in the ${newJob.department} department. It has been indexed into the vector database and is now live on your dashboard and requisitions table.`;
+
+    return {
+      text: cleanResponseText(text),
+      toolCalls,
+      sources,
+      actionPayload: {
+        type: 'job_created',
+        data: newJob,
+      },
+    };
+  }
+
+  // 2. ACTION: Add / Create Candidate Profile
+  if (
+    qLower.includes('add candidate') ||
+    qLower.includes('create candidate') ||
+    qLower.includes('upload candidate') ||
+    qLower.includes('new candidate')
+  ) {
+    let candName = 'Rahul Verma';
+    const nameMatch = userQuery.match(/(?:named|candidate|for)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)/);
+    if (nameMatch && nameMatch[1]) {
+      candName = nameMatch[1];
+    }
+
+    const techPool = ['Python', 'Django', 'FastAPI', 'PostgreSQL', 'Docker', 'React', 'TypeScript', 'Node.js', 'AWS', 'SQL'];
+    const foundSkills: string[] = [];
+    for (const tech of techPool) {
+      if (qLower.includes(tech.toLowerCase())) {
+        foundSkills.push(tech);
+      }
+    }
+    const finalSkills = foundSkills.length > 0 ? foundSkills : ['Python', 'PostgreSQL', 'FastAPI', 'Docker', 'REST APIs'];
+
+    const newCandidate: Candidate = {
+      id: `cand-${Date.now()}`,
+      name: candName,
+      email: `${candName.toLowerCase().replace(/\s+/g, '.')}@example.com`,
+      phone: '+1 (555) 789-0123',
+      location: 'Austin, TX (Remote)',
+      summary: `Software Engineer with 3+ years of experience specializing in ${finalSkills.slice(0, 3).join(', ')}.`,
+      education: [{ degree: 'B.S. in Computer Science', institution: 'State Technological University', year: '2020 - 2024' }],
+      skills: finalSkills,
+      experience: [
+        {
+          title: 'Software Developer',
+          company: 'NextGen Systems',
+          duration: '2022 - Present',
+          responsibilities: [
+            `Engineered microservices and APIs using ${finalSkills.slice(0, 2).join(' and ')}.`,
+            'Maintained relational databases and optimized API response times.',
+          ],
+        },
+      ],
+      certifications: ['Certified Software Developer'],
+      projects: [{ name: 'Enterprise API Platform', technologies: finalSkills.slice(0, 3), description: 'Designed high-throughput REST APIs and database schema migrations.' }],
+      achievements: ['Delivered core data service ahead of scheduled quarterly sprint.'],
+      rawText: `${candName}\n${finalSkills.join(', ')}\nSoftware Developer at NextGen Systems`,
+      fileName: `${candName.replace(/\s+/g, '_')}_Resume.pdf`,
+      uploadedAt: new Date().toISOString(),
+    };
+
+    await appStore.addCandidate(newCandidate);
+
+    toolCalls.push({
+      toolName: 'add_candidate',
+      input: { name: newCandidate.name, skills: newCandidate.skills },
+      outputSummary: `Parsed and indexed candidate profile for "${newCandidate.name}".`,
+    });
+
+    const text = `I have added ${newCandidate.name} to the candidate talent pool. Their profile, verified skills (${finalSkills.join(', ')}), and experience have been indexed into the vector store and added to your candidates directory.`;
+
+    return {
+      text: cleanResponseText(text),
+      toolCalls,
+      sources,
+      actionPayload: {
+        type: 'candidate_added',
+        data: newCandidate,
+      },
+    };
+  }
+
+  // 3. ACTION: AI Resume Analysis (Matching a Candidate against a Job)
+  if (
+    (qLower.includes('analyze') || qLower.includes('match') || qLower.includes('evaluate')) &&
+    (context.candidates.some(c => qLower.includes(c.name.toLowerCase())) || context.jobs.some(j => qLower.includes(j.title.toLowerCase())))
+  ) {
+    const matchedCandidate = context.candidates.find(c => qLower.includes(c.name.toLowerCase())) || context.candidates[0];
+    const matchedJob = context.jobs.find(j => qLower.includes(j.title.toLowerCase())) || context.jobs[0];
+
+    toolCalls.push({
+      toolName: 'analyze_resume',
+      input: { candidateId: matchedCandidate.id, jobId: matchedJob.id },
+      outputSummary: `Evaluated ${matchedCandidate.name} against "${matchedJob.title}".`,
+    });
+
+    const analysis = await analyzeCandidateAgainstJob(matchedCandidate, matchedJob);
+    appStore.addAnalysis(analysis);
+
+    const text = `I have completed the AI Resume Analysis for ${matchedCandidate.name} against the "${matchedJob.title}" opening:
+
+• Estimated Match Score: ${analysis.estimatedMatchScore}%
+• Transparent Breakdown: Skills ${analysis.scoreBreakdown.skillsMatch}% (40%) · Experience ${analysis.scoreBreakdown.experienceMatch}% (30%) · Qualifications ${analysis.scoreBreakdown.qualificationsMatch}% (20%) · Projects ${analysis.scoreBreakdown.projectsMatch}% (10%)
+• Verified Matching Skills: ${analysis.matchingSkills.slice(0, 4).map(m => m.skill).join(', ') || 'Core competencies'}
+• Gaps / Missing Requirements: ${analysis.missingSkills.join(', ') || 'No critical gaps identified'}
+• Suggested Interview Question: ${analysis.suggestedQuestions[0] || 'How do you approach scalable system architecture?'}
+
+${analysis.overallSummary}
+
+Note: Match scores serve strictly as assistive aids for human interviewers. Final hiring decisions remain under human control.`;
+
+    return {
+      text: cleanResponseText(text),
+      toolCalls,
+      sources,
+      actionPayload: {
+        type: 'analysis_completed',
+        data: analysis,
+      },
+    };
+  }
+
+  // 4. ACTION: Navigation Commands
+  if (qLower.includes('go to') || qLower.includes('open') || qLower.includes('show me') || qLower.includes('navigate to') || qLower.includes('switch to')) {
+    let targetTab: string | null = null;
+    if (qLower.includes('dashboard')) targetTab = 'dashboard';
+    else if (qLower.includes('resume') || qLower.includes('candidate')) targetTab = 'resumes';
+    else if (qLower.includes('job') || qLower.includes('requisition')) targetTab = 'jobs';
+    else if (qLower.includes('analysis') || qLower.includes('match')) targetTab = 'analysis';
+    else if (qLower.includes('compare') || qLower.includes('comparison') || qLower.includes('matrix')) targetTab = 'comparison';
+    else if (qLower.includes('interview')) targetTab = 'interview';
+    else if (qLower.includes('rag') || qLower.includes('policy') || qLower.includes('policies') || qLower.includes('knowledge')) targetTab = 'rag';
+
+    if (targetTab) {
+      toolCalls.push({
+        toolName: 'navigate_workspace',
+        input: { targetTab },
+        outputSummary: `Navigated workspace to "${targetTab}".`,
+      });
+
+      return {
+        text: `Switched your workspace view to ${targetTab.replace('-', ' ')}.`,
+        toolCalls,
+        sources,
+        actionPayload: {
+          type: 'navigate',
+          data: { targetTab },
+        },
+      };
+    }
+  }
+
+  // 5. ACTION: Candidate Comparison Intent
+  if (
+    (qLower.includes('compare') || qLower.includes('comparison')) &&
+    context.candidates.length > 0 &&
+    context.jobs.length > 0
+  ) {
+    const job = context.jobs.find(j => qLower.includes(j.title.toLowerCase())) || context.jobs[0];
+    const candidateSubset = context.candidates.slice(0, 3);
+
+    toolCalls.push({
+      toolName: 'compare_candidates',
+      input: {
+        candidate_ids: candidateSubset.map(c => c.id),
+        job_id: job.id,
+      },
+      outputSummary: `Compared ${candidateSubset.length} candidates against "${job.title}".`,
+    });
+
+    const comparison = await compareCandidates(candidateSubset, job);
+    const comparisonText = `Candidate Comparison for ${job.title}\n\n${cleanResponseText(comparison.summaryNote)}\n\n` +
+      comparison.candidates
+        .map(
+          c =>
+            `${c.candidateName} (Estimated Match: ${c.estimatedMatchScore}%)\n- Matching Skills: ${c.matchingSkills.join(', ') || 'None verified'}\n- Missing Skills / Gaps: ${c.missingSkills.join(', ') || 'None identified'}\n- Experience: ${c.experienceLevel}`
+        )
+        .join('\n\n') +
+      '\n\nNote: Match scores are estimations to assist human evaluation. Final decisions remain with the hiring committee.';
+
+    return {
+      text: cleanResponseText(comparisonText),
+      toolCalls,
+      sources,
+      actionPayload: {
+        type: 'comparison_completed',
+        data: comparison,
+      },
+    };
+  }
+
+  // 6. ACTION: Interview Question Generation Intent
+  if (
+    (qLower.includes('interview question') || qLower.includes('interview questions') || qLower.includes('interview kit') || qLower.includes('interview guide')) &&
+    context.jobs.length > 0
+  ) {
+    const matchedJob = context.jobs.find(j => qLower.includes(j.title.toLowerCase())) || context.jobs[0];
+    const matchedCandidate = context.candidates.find(c => qLower.includes(c.name.toLowerCase()));
+
+    toolCalls.push({
+      toolName: 'generate_interview_questions',
+      input: {
+        job_id: matchedJob.id,
+        candidate_id: matchedCandidate?.id,
+      },
+      outputSummary: `Generated structured interview question guide for "${matchedJob.title}".`,
+    });
+
+    const guide = await generateInterviewGuide(matchedJob, matchedCandidate);
+    const questionsText = guide.questions
+      .map(
+        (q, idx) =>
+          `${idx + 1}. [${q.category} - ${q.difficulty}] ${q.question}\n- Purpose: ${q.purpose}\n- Evaluation Rubric: ${q.evaluationCriteria}`
+      )
+      .join('\n\n');
+
+    const fullGuideText = `Structured Interview Guide for ${matchedJob.title}${matchedCandidate ? ` (Tailored for ${matchedCandidate.name})` : ''}\n\n${questionsText}\n\nInterviewer Guidelines:\n${guide.interviewerTips.map(t => `- ${t}`).join('\n')}`;
+
+    return {
+      text: cleanResponseText(fullGuideText),
+      toolCalls,
+      sources,
+      actionPayload: {
+        type: 'interview_guide_generated',
+        data: guide,
+      },
+    };
+  }
+
+  // 7. HR Policy Search Intent
   if (
     qLower.includes('policy') ||
     qLower.includes('notice period') ||
@@ -1029,76 +1544,7 @@ export async function runRecruitmentAgent(
     };
   }
 
-  // 2. Candidate Comparison Intent
-  if (
-    (qLower.includes('compare') || qLower.includes('comparison')) &&
-    context.candidates.length > 0 &&
-    context.jobs.length > 0
-  ) {
-    const job = context.jobs[0];
-    const candidateSubset = context.candidates.slice(0, 3);
-
-    toolCalls.push({
-      toolName: 'compare_candidates',
-      input: {
-        candidate_ids: candidateSubset.map(c => c.id),
-        job_id: job.id,
-      },
-      outputSummary: `Compared ${candidateSubset.length} candidates against "${job.title}".`,
-    });
-
-    const comparison = await compareCandidates(candidateSubset, job);
-    const comparisonText = `Candidate Comparison for ${job.title}\n\n${cleanResponseText(comparison.summaryNote)}\n\n` +
-      comparison.candidates
-        .map(
-          c =>
-            `${c.candidateName} (Estimated Match: ${c.estimatedMatchScore}%)\n- Matching Skills: ${c.matchingSkills.join(', ') || 'None verified'}\n- Missing Skills / Gaps: ${c.missingSkills.join(', ') || 'None identified'}\n- Experience: ${c.experienceLevel}`
-        )
-        .join('\n\n') +
-      '\n\nNote: Match scores are estimations to assist human evaluation. Final decisions remain with the hiring committee.';
-
-    return {
-      text: cleanResponseText(comparisonText),
-      toolCalls,
-      sources,
-    };
-  }
-
-  // 3. Interview Question Generation Intent
-  if (
-    (qLower.includes('interview question') || qLower.includes('interview questions')) &&
-    context.jobs.length > 0
-  ) {
-    const matchedJob = context.jobs.find(j => qLower.includes(j.title.toLowerCase())) || context.jobs[0];
-    const matchedCandidate = context.candidates.find(c => qLower.includes(c.name.toLowerCase()));
-
-    toolCalls.push({
-      toolName: 'generate_interview_questions',
-      input: {
-        job_id: matchedJob.id,
-        candidate_id: matchedCandidate?.id,
-      },
-      outputSummary: `Generated structured interview question guide for "${matchedJob.title}".`,
-    });
-
-    const guide = await generateInterviewGuide(matchedJob, matchedCandidate);
-    const questionsText = guide.questions
-      .map(
-        (q, idx) =>
-          `${idx + 1}. [${q.category} - ${q.difficulty}] ${q.question}\n- Purpose: ${q.purpose}\n- Evaluation Rubric: ${q.evaluationCriteria}`
-      )
-      .join('\n\n');
-
-    const fullGuideText = `Structured Interview Guide for ${matchedJob.title}${matchedCandidate ? ` (Tailored for ${matchedCandidate.name})` : ''}\n\n${questionsText}\n\nInterviewer Guidelines:\n${guide.interviewerTips.map(t => `- ${t}`).join('\n')}`;
-
-    return {
-      text: cleanResponseText(fullGuideText),
-      toolCalls,
-      sources,
-    };
-  }
-
-  // 4. Default: RAG Search across resumes and job descriptions
+  // 8. Default: RAG Search across resumes and job descriptions
   const searchResults = await globalVectorStore.similaritySearch(userQuery, {
     topK: 5,
   });

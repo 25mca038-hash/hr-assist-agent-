@@ -1,5 +1,6 @@
 import {
   Candidate,
+  CandidateStatus,
   JobDescription,
   HRPolicy,
   MatchAnalysis,
@@ -7,6 +8,8 @@ import {
   ComparisonResult,
   GroundedRAGAnswer,
   AgentChatMessage,
+  ScheduledInterview,
+  CandidateOutreachDraft,
 } from '../../server/types';
 
 export interface DashboardStats {
@@ -14,6 +17,14 @@ export interface DashboardStats {
   totalJobs: number;
   candidatesAnalyzed: number;
   averageMatchScore: number;
+  pipeline?: {
+    applied: number;
+    screening: number;
+    shortlisted: number;
+    interviewing: number;
+    offer: number;
+  };
+  upcomingInterviews?: ScheduledInterview[];
   recentActivities: Array<{
     id: string;
     type: string;
@@ -65,6 +76,66 @@ export const api = {
   async deleteCandidate(id: string): Promise<void> {
     const res = await fetch(`/api/candidates/${id}`, { method: 'DELETE' });
     if (!res.ok) throw new Error('Failed to delete candidate');
+  },
+
+  async updateCandidateStatus(
+    id: string,
+    status: CandidateStatus,
+    note?: string
+  ): Promise<Candidate> {
+    const res = await fetch(`/api/candidates/${id}/status`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status, note }),
+    });
+    if (!res.ok) throw new Error('Failed to update candidate status');
+    return res.json();
+  },
+
+  async getInterviews(): Promise<ScheduledInterview[]> {
+    const res = await fetch('/api/interviews');
+    if (!res.ok) throw new Error('Failed to fetch interviews');
+    return res.json();
+  },
+
+  async scheduleInterview(interviewData: Partial<ScheduledInterview>): Promise<ScheduledInterview> {
+    const res = await fetch('/api/interviews', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(interviewData),
+    });
+    if (!res.ok) throw new Error('Failed to schedule interview');
+    return res.json();
+  },
+
+  async updateInterview(id: string, updates: Partial<ScheduledInterview>): Promise<void> {
+    const res = await fetch(`/api/interviews/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(updates),
+    });
+    if (!res.ok) throw new Error('Failed to update interview');
+  },
+
+  async deleteInterview(id: string): Promise<void> {
+    const res = await fetch(`/api/interviews/${id}`, { method: 'DELETE' });
+    if (!res.ok) throw new Error('Failed to delete interview');
+  },
+
+  async getOutreachDrafts(): Promise<CandidateOutreachDraft[]> {
+    const res = await fetch('/api/outreach/drafts');
+    if (!res.ok) throw new Error('Failed to fetch outreach drafts');
+    return res.json();
+  },
+
+  async createOutreachDraft(draftData: Partial<CandidateOutreachDraft>): Promise<CandidateOutreachDraft> {
+    const res = await fetch('/api/outreach/drafts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(draftData),
+    });
+    if (!res.ok) throw new Error('Failed to create outreach draft');
+    return res.json();
   },
 
   async getJobs(): Promise<JobDescription[]> {
@@ -169,6 +240,7 @@ export const api = {
     text: string;
     toolCalls: Array<{ toolName: string; input: any; outputSummary: string }>;
     sources: Array<{ documentTitle: string; documentType: string; snippet: string }>;
+    actionPayload?: any;
   }> {
     const res = await fetch('/api/agent/chat', {
       method: 'POST',

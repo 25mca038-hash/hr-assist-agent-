@@ -15,7 +15,7 @@ import { RAGKnowledgeView } from './components/RAGKnowledgeView';
 import { AgentChatView } from './components/AgentChatView';
 import { api, DashboardStats } from './services/api';
 import { Candidate, JobDescription, HRPolicy } from '../server/types';
-import { RotateCcw, ShieldCheck, Sparkles, Database } from 'lucide-react';
+import { RotateCcw, ShieldCheck, Sparkles, Database, Bot, X } from 'lucide-react';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<ActiveTab>('dashboard');
@@ -32,6 +32,9 @@ export default function App() {
   const [isJobModalOpen, setIsJobModalOpen] = useState(false);
   const [notification, setNotification] = useState<string | null>(null);
 
+  // Global drawer copilot when on non-dashboard tabs
+  const [isDrawerCopilotOpen, setIsDrawerCopilotOpen] = useState(false);
+
   const loadData = async () => {
     try {
       const [statsData, candidatesData, jobsData, policiesData] = await Promise.all([
@@ -46,7 +49,7 @@ export default function App() {
       setJobs(jobsData);
       setPolicies(policiesData);
     } catch (e) {
-      console.error('Error loading initial application data:', e);
+      console.error('Error loading application data:', e);
     } finally {
       setIsLoading(false);
     }
@@ -58,7 +61,7 @@ export default function App() {
 
   const showToast = (message: string) => {
     setNotification(message);
-    setTimeout(() => setNotification(null), 3000);
+    setTimeout(() => setNotification(null), 3500);
   };
 
   const handleResetDemo = async () => {
@@ -71,6 +74,12 @@ export default function App() {
         alert('Failed to reset demo data.');
       }
     }
+  };
+
+  const handleNavigateTab = (tab: ActiveTab, params?: { candidateId?: string; jobId?: string }) => {
+    if (params?.candidateId) setTargetCandidateId(params.candidateId);
+    if (params?.jobId) setTargetJobId(params.jobId);
+    setActiveTab(tab);
   };
 
   const handleSelectCandidateForAnalysis = (candidateId: string, jobId: string) => {
@@ -90,6 +99,21 @@ export default function App() {
     setActiveTab('comparison');
   };
 
+  const handleActionExecuted = (payload: any) => {
+    loadData();
+    if (payload?.type === 'candidate_status_updated') {
+      showToast(`Updated ${payload.data.candidate.name}'s stage to "${payload.data.newStatus}"!`);
+    } else if (payload?.type === 'interview_scheduled') {
+      showToast(`Interview confirmed for ${payload.data.candidateName}!`);
+    } else if (payload?.type === 'job_created') {
+      showToast(`Published job requisition: "${payload.data.title}"!`);
+    } else if (payload?.type === 'outreach_drafted') {
+      showToast(`Drafted outreach email for ${payload.data.candidateName}!`);
+    } else if (payload?.type === 'analysis_completed') {
+      showToast(`Resume analysis completed!`);
+    }
+  };
+
   return (
     <div className="flex h-screen bg-slate-100 font-sans text-slate-800 antialiased overflow-hidden">
       {/* Sidebar Navigation */}
@@ -102,7 +126,7 @@ export default function App() {
       />
 
       {/* Main Content Area */}
-      <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
+      <div className="flex-1 flex flex-col min-w-0 overflow-hidden relative">
         {/* Top Header Bar */}
         <header className="h-14 bg-white border-b border-slate-200 px-6 flex items-center justify-between shrink-0 shadow-xs">
           <div className="flex items-center gap-3">
@@ -111,7 +135,11 @@ export default function App() {
             </span>
             <span className="text-slate-300">/</span>
             <span className="text-xs font-bold text-slate-900 capitalize">
-              {activeTab === 'rag' ? 'RAG Knowledge Base & Retrieval' : activeTab.replace('-', ' ')}
+              {activeTab === 'rag'
+                ? 'RAG Knowledge Base & Retrieval'
+                : activeTab === 'chat'
+                ? 'AI Recruitment Agent & Action Copilot'
+                : activeTab.replace('-', ' ')}
             </span>
           </div>
 
@@ -150,8 +178,10 @@ export default function App() {
                   stats={stats}
                   candidates={candidates}
                   jobs={jobs}
-                  setActiveTab={setActiveTab}
+                  interviews={stats?.upcomingInterviews || []}
+                  setActiveTab={handleNavigateTab}
                   onSelectCandidateForAnalysis={handleSelectCandidateForAnalysis}
+                  onRefreshData={loadData}
                   onOpenUploadModal={() => {
                     setActiveTab('resumes');
                     setIsUploadModalOpen(true);
@@ -220,11 +250,40 @@ export default function App() {
               )}
 
               {activeTab === 'chat' && (
-                <AgentChatView />
+                <AgentChatView
+                  onNavigateTab={handleNavigateTab}
+                  onActionExecuted={handleActionExecuted}
+                />
               )}
             </>
           )}
         </main>
+
+        {/* Global Floating Agent Launcher (Visible on tabs other than Dashboard & Chat) */}
+        {activeTab !== 'dashboard' && activeTab !== 'chat' && (
+          <aside aria-label="Recruitment Agent Copilot Drawer">
+            <button
+              onClick={() => setIsDrawerCopilotOpen(!isDrawerCopilotOpen)}
+              className="fixed bottom-6 right-6 z-40 bg-blue-600 hover:bg-blue-700 text-white p-3.5 rounded-full shadow-lg flex items-center gap-2 text-xs font-semibold transition cursor-pointer"
+              title="Open AI Recruitment Copilot"
+            >
+              <Bot className="w-5 h-5" />
+              <span className="hidden sm:inline">AI Agent Copilot</span>
+            </button>
+
+            {/* Slide-over Drawer Panel */}
+            {isDrawerCopilotOpen && (
+              <div className="fixed inset-y-0 right-0 z-50 w-full sm:w-[480px] bg-white shadow-2xl border-l border-slate-300 flex flex-col animate-slide-left">
+                <AgentChatView
+                  isEmbedded={true}
+                  onClose={() => setIsDrawerCopilotOpen(false)}
+                  onNavigateTab={handleNavigateTab}
+                  onActionExecuted={handleActionExecuted}
+                />
+              </div>
+            )}
+          </aside>
+        )}
       </div>
     </div>
   );

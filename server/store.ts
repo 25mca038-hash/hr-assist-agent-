@@ -1,4 +1,13 @@
-import { Candidate, JobDescription, HRPolicy, MatchAnalysis, ActivityLog } from './types';
+import {
+  Candidate,
+  CandidateStatus,
+  JobDescription,
+  HRPolicy,
+  MatchAnalysis,
+  ActivityLog,
+  ScheduledInterview,
+  CandidateOutreachDraft,
+} from './types';
 import { SEED_CANDIDATES, SEED_JOBS, SEED_POLICIES } from './rag/seedData';
 import { chunkDocument } from './rag/chunker';
 import { globalVectorStore } from './rag/vectorStore';
@@ -11,14 +20,59 @@ export interface AppState {
   policies: HRPolicy[];
   analyses: MatchAnalysis[];
   activities: ActivityLog[];
+  interviews: ScheduledInterview[];
+  outreachDrafts: CandidateOutreachDraft[];
 }
+
+const INITIAL_INTERVIEWS: ScheduledInterview[] = [
+  {
+    id: 'int-001',
+    candidateId: 'cand-002',
+    candidateName: 'Alex Chen',
+    jobId: 'job-002',
+    jobTitle: 'Machine Learning Engineer',
+    interviewType: 'Technical Round',
+    scheduledTime: new Date(Date.now() + 86400000 * 2).toISOString(),
+    interviewer: 'Marcus Vance (AI Engineering Lead)',
+    meetingLink: 'https://meet.google.com/tsc-ml-491',
+    status: 'Scheduled',
+    notes: 'Focus on PyTorch distributed training and LLM fine-tuning architecture.',
+    createdAt: new Date().toISOString(),
+  },
+  {
+    id: 'int-002',
+    candidateId: 'cand-001',
+    candidateName: 'Priya Sharma',
+    jobId: 'job-001',
+    jobTitle: 'Senior Full-Stack Engineer',
+    interviewType: 'Executive Review',
+    scheduledTime: new Date(Date.now() + 86400000 * 3).toISOString(),
+    interviewer: 'Elena Rostova (VP of Engineering)',
+    meetingLink: 'https://meet.google.com/tsc-exec-882',
+    status: 'Scheduled',
+    notes: 'System architecture vision and cross-team leadership alignment.',
+    createdAt: new Date().toISOString(),
+  },
+];
 
 class Store {
   private data: AppState = {
-    candidates: [...SEED_CANDIDATES],
+    candidates: SEED_CANDIDATES.map((c, idx) => ({
+      ...c,
+      status: (idx === 0
+        ? 'Shortlisted'
+        : idx === 1
+        ? 'Technical Interview'
+        : idx === 2
+        ? 'Screening'
+        : 'Applied') as CandidateStatus,
+      notes: [],
+    })),
     jobs: [...SEED_JOBS],
     policies: [...SEED_POLICIES],
     analyses: [],
+    interviews: [...INITIAL_INTERVIEWS],
+    outreachDrafts: [],
     activities: [
       {
         id: 'act-1',
@@ -33,6 +87,13 @@ class Store {
         title: 'Requisitions established',
         description: 'Created Senior Full-Stack Engineer, Machine Learning Engineer, and UI/UX Engineer openings.',
         timestamp: new Date(Date.now() - 3600000).toISOString(),
+      },
+      {
+        id: 'act-3',
+        type: 'schedule_interview',
+        title: 'Interview confirmed: Alex Chen',
+        description: 'Technical Round scheduled for Machine Learning Engineer requisition.',
+        timestamp: new Date(Date.now() - 1800000).toISOString(),
       },
     ],
   };
@@ -261,18 +322,98 @@ ${job.qualifications.join('\n')}`;
     }
   }
 
+  public updateCandidateStatus(id: string, status: CandidateStatus, note?: string): Candidate | null {
+    const cand = this.getCandidateById(id);
+    if (!cand) return null;
+    cand.status = status;
+    if (note) {
+      if (!cand.notes) cand.notes = [];
+      cand.notes.unshift(`[${new Date().toLocaleDateString()}] ${note}`);
+    }
+    this.logActivity(
+      'update_status',
+      `Pipeline update: ${cand.name}`,
+      `Candidate moved to stage "${status}"${note ? `: ${note}` : ''}`
+    );
+    this.saveToDisk();
+    return cand;
+  }
+
+  public getInterviews(): ScheduledInterview[] {
+    return this.data.interviews || [];
+  }
+
+  public addInterview(interview: ScheduledInterview): void {
+    if (!this.data.interviews) this.data.interviews = [];
+    this.data.interviews.unshift(interview);
+    this.logActivity(
+      'schedule_interview',
+      `Interview scheduled: ${interview.candidateName}`,
+      `${interview.interviewType} with ${interview.interviewer} on ${new Date(interview.scheduledTime).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}`
+    );
+    // Also update candidate status to 'Technical Interview' or 'Executive Review' if applicable
+    const cand = this.getCandidateById(interview.candidateId);
+    if (cand) {
+      cand.status = interview.interviewType === 'Executive Review' ? 'Executive Review' : 'Technical Interview';
+    }
+    this.saveToDisk();
+  }
+
+  public updateInterview(id: string, updates: Partial<ScheduledInterview>): boolean {
+    if (!this.data.interviews) return false;
+    const idx = this.data.interviews.findIndex(i => i.id === id);
+    if (idx < 0) return false;
+    this.data.interviews[idx] = { ...this.data.interviews[idx], ...updates };
+    this.saveToDisk();
+    return true;
+  }
+
+  public deleteInterview(id: string): boolean {
+    if (!this.data.interviews) return false;
+    this.data.interviews = this.data.interviews.filter(i => i.id !== id);
+    this.saveToDisk();
+    return true;
+  }
+
+  public getOutreachDrafts(): CandidateOutreachDraft[] {
+    return this.data.outreachDrafts || [];
+  }
+
+  public addOutreachDraft(draft: CandidateOutreachDraft): void {
+    if (!this.data.outreachDrafts) this.data.outreachDrafts = [];
+    this.data.outreachDrafts.unshift(draft);
+    this.logActivity(
+      'outreach_draft',
+      `Outreach draft created: ${draft.candidateName}`,
+      `Subject: "${draft.subject}" (${draft.type})`
+    );
+    this.saveToDisk();
+  }
+
   public resetToSeed(): void {
     this.data = {
-      candidates: [...SEED_CANDIDATES],
+      candidates: SEED_CANDIDATES.map((c, idx) => ({
+        ...c,
+        status: (idx === 0
+          ? 'Shortlisted'
+          : idx === 1
+          ? 'Technical Interview'
+          : idx === 2
+          ? 'Screening'
+          : 'Applied') as CandidateStatus,
+        notes: [],
+      })),
       jobs: [...SEED_JOBS],
       policies: [...SEED_POLICIES],
       analyses: [],
+      interviews: [...INITIAL_INTERVIEWS],
+      outreachDrafts: [],
       activities: [
         {
           id: `act-${Date.now()}`,
           type: 'upload_resume',
           title: 'Reset to demo seed state',
-          description: 'Restored default candidates, jobs, and HR policies.',
+          description: 'Restored default candidates, jobs, interviews, and HR policies.',
           timestamp: new Date().toISOString(),
         },
       ],

@@ -23,10 +23,21 @@ router.get('/dashboard/stats', (req, res) => {
   const jobs = appStore.getJobs();
   const analyses = appStore.getAnalyses();
   const activities = appStore.getActivities();
+  const interviews = appStore.getInterviews();
 
   const totalResumes = candidates.length;
   const totalJobs = jobs.length;
   const candidatesAnalyzed = analyses.length;
+
+  const pipeline = {
+    applied: candidates.filter(c => !c.status || c.status === 'Applied').length,
+    screening: candidates.filter(c => c.status === 'Screening').length,
+    shortlisted: candidates.filter(c => c.status === 'Shortlisted').length,
+    interviewing: candidates.filter(
+      c => c.status === 'Technical Interview' || c.status === 'Executive Review'
+    ).length,
+    offer: candidates.filter(c => c.status === 'Offer Sent' || c.status === 'Hired').length,
+  };
 
   const averageMatchScore =
     analyses.length > 0
@@ -38,6 +49,8 @@ router.get('/dashboard/stats', (req, res) => {
     totalJobs,
     candidatesAnalyzed,
     averageMatchScore,
+    pipeline,
+    upcomingInterviews: interviews.filter(i => i.status === 'Scheduled').slice(0, 5),
     recentActivities: activities.slice(0, 8),
     recentAnalyses: analyses.slice(0, 5),
     vectorChunksCount: globalVectorStore.getAllChunks().length,
@@ -118,6 +131,14 @@ router.delete('/candidates/:id', (req, res) => {
   const success = appStore.removeCandidate(req.params.id);
   if (!success) return res.status(404).json({ error: 'Candidate not found' });
   res.json({ success: true, message: 'Candidate removed successfully' });
+});
+
+router.patch('/candidates/:id/status', (req, res) => {
+  const { status, note } = req.body;
+  if (!status) return res.status(400).json({ error: 'Status is required' });
+  const updated = appStore.updateCandidateStatus(req.params.id, status, note);
+  if (!updated) return res.status(404).json({ error: 'Candidate not found' });
+  res.json(updated);
 });
 
 // ---------------- JOBS ----------------
@@ -306,6 +327,89 @@ router.post('/compare', async (req, res) => {
   } catch (err: any) {
     res.status(500).json({ error: err?.message || 'Failed to compare candidates' });
   }
+});
+
+// ---------------- INTERVIEWS ----------------
+router.get('/interviews', (req, res) => {
+  res.json(appStore.getInterviews());
+});
+
+router.post('/interviews', (req, res) => {
+  try {
+    const {
+      candidateId,
+      candidateName,
+      jobId,
+      jobTitle,
+      interviewType,
+      scheduledTime,
+      interviewer,
+      meetingLink,
+      notes,
+    } = req.body;
+
+    if (!candidateId || !candidateName || !scheduledTime) {
+      return res.status(400).json({ error: 'Candidate ID, candidate name, and scheduled time are required.' });
+    }
+
+    const newInterview = {
+      id: `int-${Date.now()}`,
+      candidateId,
+      candidateName,
+      jobId,
+      jobTitle,
+      interviewType: interviewType || 'Technical Round',
+      scheduledTime,
+      interviewer: interviewer || 'Recruiting Team Lead',
+      meetingLink: meetingLink || `https://meet.google.com/tsc-${Math.random().toString(36).slice(2, 6)}-${Math.random().toString(36).slice(2, 5)}`,
+      status: 'Scheduled' as const,
+      notes,
+      createdAt: new Date().toISOString(),
+    };
+
+    appStore.addInterview(newInterview);
+    res.status(201).json(newInterview);
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'Failed to schedule interview' });
+  }
+});
+
+router.put('/interviews/:id', (req, res) => {
+  const success = appStore.updateInterview(req.params.id, req.body);
+  if (!success) return res.status(404).json({ error: 'Interview not found' });
+  res.json({ success: true, message: 'Interview updated successfully' });
+});
+
+router.delete('/interviews/:id', (req, res) => {
+  const success = appStore.deleteInterview(req.params.id);
+  if (!success) return res.status(404).json({ error: 'Interview not found' });
+  res.json({ success: true, message: 'Interview cancelled successfully' });
+});
+
+// ---------------- OUTREACH DRAFTS ----------------
+router.get('/outreach/drafts', (req, res) => {
+  res.json(appStore.getOutreachDrafts());
+});
+
+router.post('/outreach/drafts', (req, res) => {
+  const { candidateId, candidateName, candidateEmail, subject, body, type } = req.body;
+  if (!candidateId || !subject || !body) {
+    return res.status(400).json({ error: 'Candidate details, subject, and body are required.' });
+  }
+
+  const draft = {
+    id: `draft-${Date.now()}`,
+    candidateId,
+    candidateName: candidateName || 'Candidate',
+    candidateEmail: candidateEmail || 'candidate@example.com',
+    subject,
+    body,
+    type: type || 'Interview Invitation',
+    createdAt: new Date().toISOString(),
+  };
+
+  appStore.addOutreachDraft(draft);
+  res.status(201).json(draft);
 });
 
 // ---------------- RAG KNOWLEDGE QUERY ----------------
